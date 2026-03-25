@@ -21,6 +21,7 @@ import asyncio
 import json
 import re
 from datetime import datetime, timedelta, date as Date
+from html import unescape
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -194,6 +195,24 @@ _TITLE_BLACKLIST = re.compile(
 )
 
 
+def clean_description(text: str, max_chars: int = 300) -> Optional[str]:
+    """Strip HTML tags, decode entities, and truncate at a sentence boundary."""
+    if not text:
+        return None
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = unescape(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return None
+    if len(text) <= max_chars:
+        return text
+    truncated = text[:max_chars]
+    last_end = max(truncated.rfind("."), truncated.rfind("!"), truncated.rfind("?"))
+    if last_end > max_chars // 2:
+        return text[: last_end + 1]
+    return truncated.rstrip() + "\u2026"
+
+
 def make_event(title, date_obj, time_str=None, description=None,
                url=None, location=None, source_url=None):
     if not title or not date_obj or not in_week(date_obj):
@@ -211,7 +230,7 @@ def make_event(title, date_obj, time_str=None, description=None,
         "title": title[:120],
         "date": date_obj.isoformat(),
         "time": time_str,
-        "description": description.strip()[:200] if description else None,
+        "description": clean_description(description) if description else None,
         "event_url": url or source_url,
         "location": location or None,
     }
@@ -463,7 +482,7 @@ async def fetch_kinlia_events(source_url: str) -> list[dict]:
         time_str = f"{t_start} – {t_end}" if t_end and t_start != t_end else t_start
 
         title    = item.get("name", "")
-        desc     = (item.get("details") or "")[:200]
+        desc     = item.get("details") or ""
         location = item.get("location_name") or item.get("city") or None
         event_id = item.get("id")
         url      = f"https://kinlia.com/events/{event_id}" if event_id else source_url

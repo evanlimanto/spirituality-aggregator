@@ -67,6 +67,11 @@ def refresh_events():
     return get_events()
 
 
+@app.route("/api/sources")
+def get_sources():
+    return jsonify(SOURCES)
+
+
 def nightly_cache_refresh():
     """Scrape all sources and update the cache only if the result looks valid."""
     log.info("Nightly cache refresh starting...")
