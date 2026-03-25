@@ -27,7 +27,6 @@ from zoneinfo import ZoneInfo
 import httpx
 from bs4 import BeautifulSoup, Tag
 from dateutil import parser as dateutil_parser
-from playwright.async_api import async_playwright
 
 NYC_TZ = ZoneInfo("America/New_York")
 HTTP_HEADERS = {
@@ -727,39 +726,28 @@ def extract_events(html: str, source_url: str) -> list[dict]:
     return dedup(all_events)
 
 
-# ── Playwright fetcher ────────────────────────────────────────────────────────
+# ── HTTP fetcher (no browser) ─────────────────────────────────────────────────
 
-async def fetch_page(url: str, browser) -> str:
-    page = await browser.new_page(
-        user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                   "AppleWebKit/537.36 (KHTML, like Gecko) "
-                   "Chrome/120.0.0.0 Safari/537.36"
-    )
+async def fetch_page(url: str, client: httpx.AsyncClient) -> str:
     try:
-        # Try domcontentloaded first; if it times out, fall back to 'load'
-        try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=20_000)
-        except Exception:
-            await page.goto(url, wait_until="load", timeout=35_000)
-        await page.wait_for_timeout(2_500)
-        return await page.content()
+        r = await client.get(url, timeout=20, follow_redirects=True)
+        r.raise_for_status()
+        return r.text
     except Exception as e:
         print(f"  [fetch error] {url}: {e}")
         return ""
-    finally:
-        await page.close()
 
 
-async def scrape_source(source: dict, browser, semaphore: asyncio.Semaphore) -> list[dict]:
+async def scrape_source(source: dict, client: httpx.AsyncClient,
+                        semaphore: asyncio.Semaphore) -> list[dict]:
     async with semaphore:
         print(f"Scraping: {source['name']} ...")
         t0 = asyncio.get_event_loop().time()
 
-        # Sources with a direct API — skip the browser entirely
         if "kinlia.com" in source["url"]:
             events = await fetch_kinlia_events(source["url"])
         else:
-            html = await fetch_page(source["url"], browser)
+            html = await fetch_page(source["url"], client)
             if not html:
                 return []
             loop = asyncio.get_event_loop()
@@ -778,14 +766,9 @@ async def scrape_source(source: dict, browser, semaphore: asyncio.Semaphore) -> 
 
 async def scrape_all(sources: list[dict]) -> list[dict]:
     semaphore = asyncio.Semaphore(CONCURRENCY)
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=["--disable-dev-shm-usage", "--no-sandbox"],
-        )
-        tasks = [scrape_source(s, browser, semaphore) for s in sources]
+    async with httpx.AsyncClient(headers=HTTP_HEADERS) as client:
+        tasks = [scrape_source(s, client, semaphore) for s in sources]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        await browser.close()
 
     all_events: list[dict] = []
     for r in results:
