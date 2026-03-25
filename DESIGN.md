@@ -1,6 +1,6 @@
 # NYC Event Aggregator — System Design
 
-A personal web app that scrapes ~15 NYC wellness/yoga/community event sources and displays the coming week of events grouped by day.
+A personal web app that scrapes 18 NYC wellness/yoga/community event sources and displays the coming week of events grouped by day.
 
 ---
 
@@ -11,9 +11,12 @@ Browser
   │
   ▼
 Flask (gunicorn, 1 worker)
-  ├── GET /              → serves index.html
-  ├── GET /api/events    → returns cached JSON (or triggers scrape on miss)
-  └── POST /api/refresh  → busts cache and re-scrapes
+  ├── GET  /                    → serves index.html (This Week + Sources tabs)
+  ├── GET  /api/events          → returns cached JSON (or triggers scrape on miss)
+  ├── POST /api/refresh         → busts cache and re-scrapes
+  ├── GET  /api/sources         → returns full source list
+  ├── GET|POST /api/sources/query  → filtered source list (category, status)
+  └── POST /api/query           → LLM-friendly event query (category, date filters)
          │
          ▼
     scrape_all()
@@ -30,25 +33,50 @@ APScheduler (background thread, same process)
 
 ---
 
+## API Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/` | UI (This Week + Sources tabs) |
+| GET | `/api/events` | All events for the coming week (cached) |
+| POST | `/api/refresh` | Bust cache and re-scrape |
+| GET | `/api/sources` | Full list of all 18 sources with metadata |
+| GET/POST | `/api/sources/query` | Filtered sources (`category`, `status` params) |
+| POST | `/api/query` | LLM-friendly event query — accepts `category`, `date`, `include_sources` |
+
+### `/api/query` request shape
+```json
+{
+  "category": "Yoga",
+  "date": "2026-03-25",
+  "include_sources": true
+}
+```
+
+---
+
 ## Sources
 
-| Source | Category | Extraction method |
-|---|---|---|
-| Kinlia NYC | General | Direct JSON API (`app.kinlia.life/api/external/events`) |
-| Yoga Maya | Yoga | Site-specific: `.event-wrapper` CSS classes |
-| Souk Studio | Yoga | Generic HTML (MindBody embed — usually 0 results) |
-| Kula Yoga | Yoga | Site-specific: text blocks with `Sat, 3/28/26` date lines |
-| Ohm Center | Yoga | Site-specific: prose line parser (`Month D, Day time: Title`) |
-| Abhaya Yoga | Yoga | Generic HTML (403 blocked) |
-| The Shala | Yoga | Generic JSON-LD / date scan |
-| Bhakti Center | Yoga | Generic date scan |
-| Om Factory NYC | Yoga | Generic HTML (MindBody — usually 0 results) |
-| Warrior Bridge | Yoga | Generic HTML (MindBody embed — usually 0 results) |
-| Sound Mind Center | Sound Bath | Generic HTML (JS-rendered — usually 0 results) |
-| The Alchemist's Kitchen | Wellness | Generic JSON-LD (Eventbrite `ListItem.item` pattern) |
-| Porter Eichenlaub | Therapy | Generic Squarespace event list |
-| Thus Institute | Buddhism | Site-specific: Shopify `.product-item` pipe/bullet date format |
-| Sacred Sons | Men's Work | Generic HTML (403 blocked) |
+| Source | Category | Status | Extraction method |
+|---|---|---|---|
+| Kinlia NYC | General | active | Direct JSON API (`app.kinlia.life/api/external/events`) |
+| Yoga Maya | Yoga | active | Site-specific: `.event-wrapper` CSS classes |
+| Souk Studio | Yoga | js-only | MindBody embed — JS required |
+| Kula Yoga | Yoga | active | Site-specific: text blocks with `Sat, 3/28/26` date lines |
+| Ohm Center | Yoga | active | Site-specific: prose line parser (`Month D, Day time: Title`) |
+| Abhaya Yoga | Yoga | blocked | Returns HTTP 403 |
+| The Shala | Yoga | active | Generic JSON-LD / date scan |
+| Bhakti Center | Yoga | active | Generic date scan |
+| Om Factory NYC | Yoga | js-only | MindBody embed — JS required |
+| Warrior Bridge | Yoga | js-only | MindBody embed — JS required |
+| Yogis & Yoginis | Yoga | js-only | MindBody embed + SSL handshake issue |
+| Sound Mind Center | Sound Bath | js-only | JS-rendered schedule widget |
+| The Alchemist's Kitchen | Wellness | active | Generic JSON-LD (Eventbrite `ListItem.item` pattern) |
+| Reforesters Lab | Wellness | active | Homepage event listings (listening room / adaptogen café) |
+| Porter Eichenlaub | Therapy | active | Generic Squarespace event list |
+| Thus Institute | Buddhism | active | Site-specific: Shopify `.product-item` pipe/bullet date format |
+| Sacred Sons | Men's Work | blocked | Returns HTTP 403 |
+| Puerh Brooklyn | Tea | active | Weebly prose recurring schedule (tea ceremonies, workshops) |
 
 ---
 
@@ -97,6 +125,30 @@ Time parsing handles:
 
 All dates are filtered to the current day through day+7. Kinlia timestamps are converted from UTC to `America/New_York`.
 
+### Description cleaning
+
+Event descriptions are stripped of HTML tags, decoded from HTML entities, and truncated at the nearest sentence boundary (`.`, `!`, `?`) within 300 characters. If no sentence boundary is found, text is cut with an ellipsis.
+
+---
+
+## HTTP Fetching
+
+All requests use a full Chrome 124 browser fingerprint to minimise bot-detection false positives:
+
+```python
+HTTP_HEADERS = {
+    "User-Agent": "Mozilla/5.0 ... Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,...",
+    "Accept-Language": "en-US,en;q=0.9",
+    "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", ...',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    # ...
+}
+```
+
+All 18 sources are fetched in parallel via `asyncio.gather` with a `Semaphore(15)`. HTML parsing is offloaded to a thread pool via `run_in_executor` to keep the event loop free.
+
 ---
 
 ## Caching
@@ -112,18 +164,19 @@ All dates are filtered to the current day through day+7. Kinlia timestamps are c
 
 ## Deployment
 
-Hosted on [Railway](https://railway.app). Deployed via `railway up` using a project service token.
+Hosted on [Railway](https://railway.app). Auto-deployed on every push to `main` via GitHub Actions.
 
 - **Runtime**: Python 3.13, gunicorn, 1 worker
 - **Build**: Railpack (auto-detected Python)
 - **Config**: `railway.toml` sets start command and healthcheck
 - **URL**: `https://web-production-0910b.up.railway.app`
-- **Re-deploy**: `RAILWAY_TOKEN=<token> railway up --service b0e5d8ab-d7a6-4235-bb89-65f7617f4bb1 --detach`
+- **CI/CD**: `.github/workflows/deploy.yml` runs `railway up` on push to `main`
+- **Manual re-deploy**: `RAILWAY_TOKEN=<token> railway up --service b0e5d8ab-d7a6-4235-bb89-65f7617f4bb1 --detach`
 
 ---
 
 ## Known Limitations
 
-- **MindBody-embedded schedules** (Souk Studio, Warrior Bridge, Om Factory) render via JavaScript in an iframe. Plain HTTP fetches return the shell page only — 0 events extracted.
+- **MindBody-embedded schedules** (Souk Studio, Warrior Bridge, Om Factory, Yogis & Yoginis) render via JavaScript in an iframe. Plain HTTP fetches return the shell page only — 0 events extracted.
 - **Blocked sites** (Abhaya Yoga, Sacred Sons) return HTTP 403 to non-browser user agents.
 - **Railway `/tmp` is ephemeral** — the cache file is lost on redeploy/restart. The nightly cron re-warms it; the first request after a cold start triggers a live scrape (~6s).
