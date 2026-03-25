@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NYC Events This Week</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --border: #2e3248;
+      --text: #e8eaf0;
+      --muted: #7c82a0;
+      --accent: #7c6cf8;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 0 0 60px;
+    }
+
+    /* ── Header ── */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      padding: 18px 32px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    header h1 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      flex: 1;
+    }
+    header h1 span { color: var(--accent); }
+
+    .filters {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .filter-btn {
+      padding: 4px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--muted);
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .filter-btn:hover { border-color: var(--accent); color: var(--text); }
+    .filter-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+    .refresh-btn {
+      padding: 6px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--text);
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: background 0.15s;
+      white-space: nowrap;
+    }
+    .refresh-btn:hover { background: var(--accent); border-color: var(--accent); }
+    .refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* ── Loading ── */
+    #loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 80px 32px;
+      color: var(--muted);
+    }
+    .spinner {
+      width: 36px; height: 36px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Main ── */
+    #week {
+      padding: 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 40px;
+    }
+
+    /* ── Day section ── */
+    .day-section {}
+    .day-header {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      margin-bottom: 16px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .day-name {
+      font-size: 1.1rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    .day-date {
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+    .event-count {
+      margin-left: auto;
+      font-size: 0.75rem;
+      color: var(--muted);
+      background: var(--surface2);
+      padding: 2px 8px;
+      border-radius: 999px;
+    }
+
+    .events-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 12px;
+    }
+
+    .empty-day {
+      color: var(--muted);
+      font-size: 0.85rem;
+      font-style: italic;
+      padding: 8px 0;
+    }
+
+    /* ── Event card ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      transition: border-color 0.15s, transform 0.15s;
+      text-decoration: none;
+      color: inherit;
+    }
+    .card:hover {
+      border-color: var(--accent);
+      transform: translateY(-1px);
+    }
+
+    .card-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .card-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      line-height: 1.35;
+    }
+
+    .cat-badge {
+      flex-shrink: 0;
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 999px;
+      letter-spacing: 0.03em;
+    }
+
+    .card-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .meta-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .meta-row svg { flex-shrink: 0; opacity: 0.7; }
+
+    .card-desc {
+      font-size: 0.82rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .card-source {
+      font-size: 0.75rem;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+      padding-top: 8px;
+      margin-top: 2px;
+    }
+
+    /* ── Utility ── */
+    .hidden { display: none !important; }
+
+    #status-bar {
+      text-align: center;
+      font-size: 0.78rem;
+      color: var(--muted);
+      padding: 8px;
+    }
+
+    @media (max-width: 600px) {
+      header { padding: 14px 16px; }
+      #week { padding: 20px 16px; }
+      .events-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>NYC Events <span>This Week</span></h1>
+  <div class="filters" id="filters">
+    <button class="filter-btn active" data-cat="all">All</button>
+  </div>
+  <button class="refresh-btn" id="refreshBtn" onclick="refresh()">Refresh</button>
+</header>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <div>Scraping events across NYC… this takes ~60s on first load</div>
+</div>
+
+<div id="week" class="hidden"></div>
+<div id="status-bar" class="hidden"></div>
+
+<script>
+  const CATEGORY_COLORS = {{ category_colors | tojson }};
+
+  let allEvents = [];
+  let activeCategory = "all";
+
+  const DAY_NAMES = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+  const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+  function formatDayHeader(dateStr) {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const date = new Date(y, m - 1, d);
+    const today = new Date();
+    today.setHours(0,0,0,0);
+    const diff = Math.round((date - today) / 86400000);
+    const label = diff === 0 ? "Today" : diff === 1 ? "Tomorrow" : DAY_NAMES[date.getDay()];
+    return { label, sub: `${MONTH_NAMES[m-1]} ${d}` };
+  }
+
+  function catColor(cat) {
+    return CATEGORY_COLORS[cat] || "#6366f1";
+  }
+
+  function icon(type) {
+    if (type === "time") return `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
+    if (type === "loc")  return `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>`;
+    return "";
+  }
+
+  function renderCard(evt) {
+    const color = catColor(evt.category);
+    const url = evt.event_url || evt.source_url || "#";
+    return `
+      <a class="card" href="${url}" target="_blank" rel="noopener" data-cat="${evt.category}">
+        <div class="card-top">
+          <div class="card-title">${escHtml(evt.title)}</div>
+          <span class="cat-badge" style="background:${color}22;color:${color}">${escHtml(evt.category)}</span>
+        </div>
+        <div class="card-meta">
+          ${evt.time ? `<div class="meta-row">${icon("time")} ${escHtml(evt.time)}</div>` : ""}
+          ${evt.location ? `<div class="meta-row">${icon("loc")} ${escHtml(evt.location)}</div>` : ""}
+        </div>
+        ${evt.description ? `<div class="card-desc">${escHtml(evt.description)}</div>` : ""}
+        <div class="card-source">${escHtml(evt.source)}</div>
+      </a>`;
+  }
+
+  function renderWeek(events, week) {
+    const container = document.getElementById("week");
+    container.innerHTML = "";
+
+    // build filter buttons
+    const cats = [...new Set(events.map(e => e.category))].sort();
+    const filtersEl = document.getElementById("filters");
+    filtersEl.innerHTML = `<button class="filter-btn ${activeCategory==="all"?"active":""}" data-cat="all">All</button>`;
+    cats.forEach(cat => {
+      const btn = document.createElement("button");
+      btn.className = "filter-btn" + (activeCategory === cat ? " active" : "");
+      btn.dataset.cat = cat;
+      btn.textContent = cat;
+      btn.style.setProperty("--c", catColor(cat));
+      if (activeCategory === cat) { btn.style.background = catColor(cat); btn.style.borderColor = catColor(cat); btn.style.color="#fff"; }
+      filtersEl.appendChild(btn);
+    });
+
+    filtersEl.querySelectorAll(".filter-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        activeCategory = btn.dataset.cat;
+        renderWeek(allEvents, week);
+      });
+    });
+
+    const filtered = activeCategory === "all" ? events : events.filter(e => e.category === activeCategory);
+
+    // group by date
+    const byDay = {};
+    week.forEach(d => byDay[d] = []);
+    filtered.forEach(evt => {
+      if (byDay[evt.date] !== undefined) byDay[evt.date].push(evt);
+    });
+
+    // sort each day by time
+    week.forEach(d => {
+      byDay[d].sort((a, b) => {
+        if (!a.time) return 1;
+        if (!b.time) return -1;
+        return parseTime(a.time) - parseTime(b.time);
+      });
+    });
+
+    week.forEach(dateStr => {
+      const { label, sub } = formatDayHeader(dateStr);
+      const dayEvents = byDay[dateStr];
+      const section = document.createElement("section");
+      section.className = "day-section";
+      section.innerHTML = `
+        <div class="day-header">
+          <span class="day-name">${label}</span>
+          <span class="day-date">${sub}</span>
+          <span class="event-count">${dayEvents.length} event${dayEvents.length !== 1 ? "s" : ""}</span>
+        </div>
+        <div class="events-grid">
+          ${dayEvents.length === 0
+            ? `<div class="empty-day">No events found</div>`
+            : dayEvents.map(renderCard).join("")}
+        </div>`;
+      container.appendChild(section);
+    });
+  }
+
+  function parseTime(t) {
+    if (!t) return 9999;
+    const m = t.match(/(\d+):(\d+)\s*(AM|PM)/i);
+    if (!m) return 9999;
+    let h = parseInt(m[1]);
+    const min = parseInt(m[2]);
+    const ampm = m[3].toUpperCase();
+    if (ampm === "PM" && h !== 12) h += 12;
+    if (ampm === "AM" && h === 12) h = 0;
+    return h * 60 + min;
+  }
+
+  function escHtml(str) {
+    if (!str) return "";
+    return str.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+
+  async function loadEvents(endpoint="/api/events") {
+    document.getElementById("loading").classList.remove("hidden");
+    document.getElementById("week").classList.add("hidden");
+    document.getElementById("status-bar").classList.add("hidden");
+    document.getElementById("refreshBtn").disabled = true;
+
+    try {
+      const method = endpoint === "/api/refresh" ? "POST" : "GET";
+      const res = await fetch(endpoint, { method });
+      const data = await res.json();
+      allEvents = data.events;
+      renderWeek(allEvents, data.week);
+      document.getElementById("loading").classList.add("hidden");
+      document.getElementById("week").classList.remove("hidden");
+      const status = document.getElementById("status-bar");
+      status.textContent = `${allEvents.length} events loaded ${data.cached ? "(cached)" : "(fresh)"}`;
+      status.classList.remove("hidden");
+    } catch (err) {
+      document.getElementById("loading").innerHTML = `<div style="color:#f87171">Error loading events: ${err.message}</div>`;
+    } finally {
+      document.getElementById("refreshBtn").disabled = false;
+    }
+  }
+
+  function refresh() {
+    loadEvents("/api/refresh");
+  }
+
+  loadEvents();
+</script>
+</body>
+</html>
