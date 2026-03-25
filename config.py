@@ -40,6 +40,18 @@ SOURCES = [
     # Men's Work
     {"name": "Sacred Sons", "url": "https://www.sacredsons.com/", "category": "Men's Work",
      "status": "blocked", "note": "Returns HTTP 403"},
+
+    # Tea
+    {"name": "Puerh Brooklyn", "url": "https://www.puerhbrooklyn.com/tearoom.html", "category": "Tea",
+     "status": "active", "note": "Weebly — prose recurring schedule (tea ceremonies, workshops)"},
+
+    # Yoga
+    {"name": "Yogis & Yoginis", "url": "https://yogisandyoginis.com/schedule", "category": "Yoga",
+     "status": "js-only", "note": "MindBody embed + SSL handshake issue"},
+
+    # Wellness
+    {"name": "Reforesters Lab", "url": "https://www.reforesters.io/", "category": "Wellness",
+     "status": "active", "note": "Listening room / adaptogen café — events on homepage"},
 ]
 
 CATEGORY_COLORS = {
