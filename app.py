@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 
 from config import CATEGORY_COLORS, SOURCES
 from scraper import scrape_all
@@ -70,6 +70,58 @@ def refresh_events():
 @app.route("/api/sources")
 def get_sources():
     return jsonify(SOURCES)
+
+
+@app.route("/api/query", methods=["POST"])
+def query_events():
+    """LLM-friendly endpoint. Accepts optional JSON filters and returns a
+    structured payload suitable for embedding in a tool-call response.
+
+    Request body (all fields optional):
+      {
+        "category": "Yoga",          // filter by category name (case-insensitive)
+        "date": "2026-03-25",        // filter to a specific ISO date
+        "include_sources": true      // also return source metadata (default false)
+      }
+
+    Response:
+      {
+        "events": [...],
+        "sources": [...],            // only if include_sources=true
+        "meta": { "total": 42, "cached": true, "week": ["2026-03-25", ...] }
+      }
+    """
+    body = request.get_json(silent=True) or {}
+    category_filter = (body.get("category") or "").strip().lower()
+    date_filter = (body.get("date") or "").strip()
+    include_sources = bool(body.get("include_sources", False))
+
+    cached = load_cache()
+    if cached is not None:
+        events, is_cached = cached, True
+    else:
+        events = asyncio.run(scrape_all(SOURCES))
+        save_cache(events)
+        is_cached = False
+
+    filtered = events
+    if category_filter:
+        filtered = [e for e in filtered if e.get("category", "").lower() == category_filter]
+    if date_filter:
+        filtered = [e for e in filtered if e.get("date") == date_filter]
+
+    payload = {
+        "events": filtered,
+        "meta": {
+            "total": len(filtered),
+            "cached": is_cached,
+            "week": build_week_days(),
+        },
+    }
+    if include_sources:
+        payload["sources"] = SOURCES
+
+    return jsonify(payload)
 
 
 def nightly_cache_refresh():
