@@ -1,18 +1,25 @@
 import asyncio
 import json
+import logging
 import os
 import time
 from datetime import datetime, timedelta
 
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from flask import Flask, jsonify, render_template
 
 from config import CATEGORY_COLORS, SOURCES
 from scraper import scrape_all
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger(__name__)
+
 app = Flask(__name__)
 
 CACHE_FILE = "/tmp/event-aggregator-cache.json"
 CACHE_TTL = 60 * 60  # 1 hour
+MIN_EVENTS_FOR_VALID_SCRAPE = 5  # don't overwrite cache with an empty/broken result
 
 
 def load_cache():
@@ -58,6 +65,42 @@ def refresh_events():
     if os.path.exists(CACHE_FILE):
         os.remove(CACHE_FILE)
     return get_events()
+
+
+def nightly_cache_refresh():
+    """Scrape all sources and update the cache only if the result looks valid."""
+    log.info("Nightly cache refresh starting...")
+    try:
+        events = asyncio.run(scrape_all(SOURCES))
+        if len(events) >= MIN_EVENTS_FOR_VALID_SCRAPE:
+            save_cache(events)
+            log.info(f"Nightly cache refresh succeeded: {len(events)} events cached.")
+        else:
+            log.warning(
+                f"Nightly refresh returned only {len(events)} events — "
+                "cache NOT updated to avoid overwriting good data."
+            )
+    except Exception as e:
+        log.error(f"Nightly cache refresh failed: {e}")
+
+
+def start_scheduler():
+    scheduler = BackgroundScheduler(timezone="America/New_York")
+    # Run at 3:00 AM NYC time every night
+    scheduler.add_job(
+        nightly_cache_refresh,
+        trigger=CronTrigger(hour=3, minute=0, timezone="America/New_York"),
+        id="nightly_refresh",
+        name="Nightly event cache refresh",
+        replace_existing=True,
+    )
+    scheduler.start()
+    log.info("Scheduler started — nightly refresh at 3:00 AM ET.")
+    return scheduler
+
+
+# Start scheduler when the app loads (gunicorn imports this module once per worker)
+_scheduler = start_scheduler()
 
 
 if __name__ == "__main__":
