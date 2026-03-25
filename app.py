@@ -72,6 +72,38 @@ def get_sources():
     return jsonify(SOURCES)
 
 
+@app.route("/api/sources/query", methods=["GET", "POST"])
+def query_sources():
+    """LLM-friendly sources endpoint. Returns all scraped sources with metadata.
+
+    Optional POST body filters:
+      { "category": "Yoga", "status": "active" }
+
+    Response:
+      {
+        "sources": [ { name, url, category, status, note } ],
+        "meta": { "total": 15, "categories": [...] }
+      }
+    """
+    body = request.get_json(silent=True) or {}
+    category_filter = (body.get("category") or request.args.get("category") or "").strip().lower()
+    status_filter = (body.get("status") or request.args.get("status") or "").strip().lower()
+
+    sources = SOURCES
+    if category_filter:
+        sources = [s for s in sources if s["category"].lower() == category_filter]
+    if status_filter:
+        sources = [s for s in sources if s["status"].lower() == status_filter]
+
+    return jsonify({
+        "sources": sources,
+        "meta": {
+            "total": len(sources),
+            "categories": sorted({s["category"] for s in SOURCES}),
+        },
+    })
+
+
 @app.route("/api/query", methods=["POST"])
 def query_events():
     """LLM-friendly endpoint. Accepts optional JSON filters and returns a
