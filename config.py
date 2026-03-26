@@ -52,6 +52,10 @@ SOURCES = [
     # Wellness
     {"name": "Reforesters Lab", "url": "https://www.reforesters.io/", "category": "Wellness",
      "status": "active", "note": "Listening room / adaptogen café — events on homepage"},
+    {"name": "Maha Rose", "url": "https://www.maharose.com/upcoming", "category": "Wellness",
+     "status": "active", "note": "Healing arts center — upcoming events page"},
+    {"name": "Official Ritual", "url": "https://officialritual.com/pages/rituals", "category": "Wellness",
+     "status": "active", "note": "Ritual wellness space — rituals/events page"},
 ]
 
 CATEGORY_COLORS = {
