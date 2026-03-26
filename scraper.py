@@ -51,7 +51,7 @@ CONCURRENCY = 15  # all sources in parallel
 # ── Week helpers ─────────────────────────────────────────────────────────────
 
 def _today() -> Date:
-    return datetime.now().date()
+    return datetime.now(tz=NYC_TZ).date()
 
 def _week_end() -> Date:
     return _today() + timedelta(days=7)
