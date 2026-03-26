@@ -846,6 +846,21 @@ async def scrape_source(source: dict, client: httpx.AsyncClient,
         return events
 
 
+def load_static_events(path: str = "static_events.json") -> list[dict]:
+    """Load manually committed events and filter to the current week."""
+    import os
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path) as f:
+            events = json.load(f)
+        from datetime import date as _Date
+        return [e for e in events if in_week(_Date.fromisoformat(e["date"]))]
+    except Exception as e:
+        print(f"  [static events error] {e}")
+        return []
+
+
 async def scrape_all(sources: list[dict]) -> list[dict]:
     semaphore = asyncio.Semaphore(CONCURRENCY)
     async with httpx.AsyncClient(headers=HTTP_HEADERS) as client:
@@ -858,4 +873,9 @@ async def scrape_all(sources: list[dict]) -> list[dict]:
             all_events.extend(r)
         elif isinstance(r, Exception):
             print(f"  [task error] {r}")
-    return all_events
+
+    static = load_static_events()
+    if static:
+        print(f"  [static] loaded {len(static)} event(s) from static_events.json")
+    all_events.extend(static)
+    return dedup(all_events)
