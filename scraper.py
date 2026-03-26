@@ -507,7 +507,57 @@ async def fetch_kinlia_events(source_url: str) -> list[dict]:
     return dedup(events)
 
 
-# ── Site-specific: Thus (Shopify) ─────────────────────────────────────────────
+# ── Site-specific: Thus (Shopify JSON API) ────────────────────────────────────
+
+THUS_API = "https://shop.thus.org/collections/programs-events/products.json?limit=50"
+
+# Strip trailing " | Month" suffix from Shopify product titles
+_THUS_MONTH_SUFFIX_RE = re.compile(
+    r"\s*\|\s*(?:january|february|march|april|may|june|july|august"
+    r"|september|october|november|december)$",
+    re.IGNORECASE,
+)
+
+
+async def fetch_thus_api(source_url: str) -> list[dict]:
+    """Use Shopify's products.json API instead of HTML — works from any IP."""
+    try:
+        async with httpx.AsyncClient(headers=HTTP_HEADERS, timeout=15) as client:
+            r = await client.get(THUS_API, follow_redirects=True)
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        print(f"  [thus api error] {e}")
+        return []
+
+    events = []
+    for product in data.get("products", []):
+        title = _THUS_MONTH_SUFFIX_RE.sub("", product.get("title", "")).strip()
+        handle = product.get("handle", "")
+        url = f"https://shop.thus.org/products/{handle}"
+
+        body_html = product.get("body_html", "")
+        body_text = re.sub(r"<[^>]+>", " ", body_html)
+        body_text = unescape(body_text)
+        body_text = re.sub(r"\s+", " ", body_text).strip()
+
+        t = parse_time(body_text)
+
+        # Extract every explicit date from the body (handles multi-date events)
+        seen: set = set()
+        for m in DATE_RE.finditer(body_text):
+            d = parse_date(m.group(0))
+            if d and d not in seen:
+                seen.add(d)
+                evt = make_event(title=title, date_obj=d, time_str=t,
+                                 url=url, source_url=source_url)
+                if evt:
+                    events.append(evt)
+
+    return dedup(events)
+
+
+# ── Site-specific: Thus (Shopify HTML fallback — kept for reference) ───────────
 
 _THUS_DATE_RE = re.compile(
     r"(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s*[•·]\s*"
@@ -776,6 +826,8 @@ async def scrape_source(source: dict, client: httpx.AsyncClient,
 
         if "kinlia.com" in source["url"]:
             events = await fetch_kinlia_events(source["url"])
+        elif "thus.org" in source["url"]:
+            events = await fetch_thus_api(source["url"])
         else:
             html = await fetch_page(source["url"], client)
             if not html:
