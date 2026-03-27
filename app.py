@@ -6,8 +6,6 @@ import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
 from flask import Flask, jsonify, render_template, request
 
 from config import CATEGORY_COLORS, SOURCES
@@ -25,15 +23,15 @@ MIN_EVENTS_FOR_VALID_SCRAPE = 5  # don't overwrite cache with an empty/broken re
 
 def load_cache():
     if not os.path.exists(CACHE_FILE):
-        return None
+        return None, None
     try:
         with open(CACHE_FILE) as f:
             data = json.load(f)
         if time.time() - data.get("ts", 0) < CACHE_TTL:
-            return data["events"]
+            return data["events"], data.get("ts")
     except Exception:
         pass
-    return None
+    return None, None
 
 
 def save_cache(events):
@@ -53,12 +51,13 @@ def index():
 
 @app.route("/api/events")
 def get_events():
-    cached = load_cache()
+    cached, ts = load_cache()
     if cached is not None:
-        return jsonify({"events": cached, "cached": True, "week": build_week_days()})
+        return jsonify({"events": cached, "cached": True, "scraped_at": ts, "week": build_week_days()})
+    ts = time.time()
     events = asyncio.run(scrape_all(SOURCES))
     save_cache(events)
-    return jsonify({"events": events, "cached": False, "week": build_week_days()})
+    return jsonify({"events": events, "cached": False, "scraped_at": ts, "week": build_week_days()})
 
 
 @app.route("/api/refresh", methods=["POST"])
@@ -129,10 +128,11 @@ def query_events():
     date_filter = (body.get("date") or "").strip()
     include_sources = bool(body.get("include_sources", False))
 
-    cached = load_cache()
+    cached, ts = load_cache()
     if cached is not None:
         events, is_cached = cached, True
     else:
+        ts = time.time()
         events = asyncio.run(scrape_all(SOURCES))
         save_cache(events)
         is_cached = False
@@ -155,42 +155,6 @@ def query_events():
         payload["sources"] = SOURCES
 
     return jsonify(payload)
-
-
-def nightly_cache_refresh():
-    """Scrape all sources and update the cache only if the result looks valid."""
-    log.info("Nightly cache refresh starting...")
-    try:
-        events = asyncio.run(scrape_all(SOURCES))
-        if len(events) >= MIN_EVENTS_FOR_VALID_SCRAPE:
-            save_cache(events)
-            log.info(f"Nightly cache refresh succeeded: {len(events)} events cached.")
-        else:
-            log.warning(
-                f"Nightly refresh returned only {len(events)} events — "
-                "cache NOT updated to avoid overwriting good data."
-            )
-    except Exception as e:
-        log.error(f"Nightly cache refresh failed: {e}")
-
-
-def start_scheduler():
-    scheduler = BackgroundScheduler(timezone="America/New_York")
-    # Run at 3:00 AM NYC time every night
-    scheduler.add_job(
-        nightly_cache_refresh,
-        trigger=CronTrigger(hour=3, minute=0, timezone="America/New_York"),
-        id="nightly_refresh",
-        name="Nightly event cache refresh",
-        replace_existing=True,
-    )
-    scheduler.start()
-    log.info("Scheduler started — nightly refresh at 3:00 AM ET.")
-    return scheduler
-
-
-# Start scheduler when the app loads (gunicorn imports this module once per worker)
-_scheduler = start_scheduler()
 
 
 if __name__ == "__main__":

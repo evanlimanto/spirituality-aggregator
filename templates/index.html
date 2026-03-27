@@ -607,7 +607,10 @@
       document.getElementById("loading").classList.add("hidden");
       document.getElementById("view-events").classList.remove("hidden");
       const sb = document.getElementById("status-bar");
-      sb.textContent = `${allEvents.length} events · ${data.cached ? "from cache" : "freshly scraped"}`;
+      const scrapedAt = data.scraped_at
+        ? new Date(data.scraped_at * 1000).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"})
+        : null;
+      sb.textContent = `${allEvents.length} events · last scraped ${scrapedAt}`;
       sb.classList.remove("hidden");
     } catch (err) {
       document.getElementById("loading").innerHTML =
