@@ -776,11 +776,57 @@ def dedup(events: list[dict]) -> list[dict]:
     return out
 
 
+# ── Site-specific: Souk Studio ────────────────────────────────────────────────
+
+def extract_souk(soup: BeautifulSoup, source_url: str) -> list[dict]:
+    events = []
+    for table in soup.find_all("div", id="schedule-table"):
+        title_el = table.find("h2", class_="table_title")
+        if not title_el:
+            continue
+        try:
+            date_obj = dateutil_parser.parse(title_el.get_text(strip=True)).date()
+        except Exception:
+            continue
+        if not in_week(date_obj):
+            continue
+
+        for row in table.find_all("div", class_="row"):
+            left = row.find("div", class_="left")
+            if not left:
+                continue
+
+            time_el = left.find("div", class_="first-column")
+            time_str = None
+            if time_el:
+                raw = time_el.find("p")
+                if raw:
+                    time_str = raw.contents[0].strip() if raw.contents else None
+
+            title_col = left.find("div", class_="second-column")
+            if not title_col:
+                continue
+            title_p = title_col.find("p")
+            if not title_p:
+                continue
+            title = title_p.get_text(strip=True)
+
+            book_a = row.find("a", class_="link")
+            event_url = book_a["href"] if book_a and book_a.get("href") else source_url
+
+            evt = make_event(title=title, date_obj=date_obj, time_str=time_str,
+                             url=event_url, source_url=source_url)
+            if evt:
+                events.append(evt)
+    return events
+
+
 SITE_EXTRACTORS = {
-    "yogamaya.com":  extract_yogamaya,
-    "thus.org":      extract_thus,
-    "kulayoga.com":  extract_kula,
-    "ohmcenter.com": extract_ohm,
+    "yogamaya.com":   extract_yogamaya,
+    "thus.org":       extract_thus,
+    "kulayoga.com":   extract_kula,
+    "ohmcenter.com":  extract_ohm,
+    "soukstudio.com": extract_souk,
 }
 
 
@@ -818,6 +864,28 @@ async def fetch_page(url: str, client: httpx.AsyncClient) -> str:
         return ""
 
 
+# Sites that block httpx via TLS fingerprinting but allow curl
+CURL_DOMAINS = {"soukstudio.com"}
+
+
+async def fetch_via_curl(url: str) -> str:
+    """Fetch a URL using the system curl binary (bypasses TLS fingerprinting)."""
+    import asyncio as _aio
+    try:
+        proc = await _aio.create_subprocess_exec(
+            "curl", "-s", "-L", "--max-time", "20",
+            "-A", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            url,
+            stdout=_aio.subprocess.PIPE,
+            stderr=_aio.subprocess.DEVNULL,
+        )
+        stdout, _ = await proc.communicate()
+        return stdout.decode("utf-8", errors="replace")
+    except Exception as e:
+        print(f"  [curl error] {url}: {e}")
+        return ""
+
+
 async def scrape_source(source: dict, client: httpx.AsyncClient,
                         semaphore: asyncio.Semaphore) -> list[dict]:
     async with semaphore:
@@ -828,6 +896,14 @@ async def scrape_source(source: dict, client: httpx.AsyncClient,
             events = await fetch_kinlia_events(source["url"])
         elif "thus.org" in source["url"]:
             events = await fetch_thus_api(source["url"])
+        elif any(d in source["url"] for d in CURL_DOMAINS):
+            html = await fetch_via_curl(source["url"])
+            if not html:
+                return []
+            loop = asyncio.get_event_loop()
+            events = await loop.run_in_executor(
+                None, extract_events, html, source["url"]
+            )
         else:
             html = await fetch_page(source["url"], client)
             if not html:
