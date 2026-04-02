@@ -9,12 +9,17 @@ Generic strategies (tried for all sites):
   5. <time datetime="..."> elements near headings
 
 Site-specific extractors (keyed by domain substring):
-  - yogamaya.com     → .event-wrapper CSS classes
-  - kinlia.com       → EventCard_container DOM
-  - thus.org         → Shopify product-item with pipe/bullet date
-  - kulayoga.com     → text-block: title / teacher / "Sat, 3/28/26"
-  - ohmcenter.com    → prose lines: "Month D, Day time: Title"
-  - eventbrite.com   → handled by JSON-LD fix (ListItem.item)
+  - yogamaya.com        → .event-wrapper CSS classes
+  - kinlia.com          → EventCard_container DOM
+  - thus.org            → Shopify product-item with pipe/bullet date
+  - kulayoga.com        → text-block: title / teacher / "Sat, 3/28/26"
+  - ohmcenter.com       → prose lines: "Month D, Day time: Title"
+  - eventbrite.com      → handled by JSON-LD fix (ListItem.item)
+  - satsangnyc.com      → JSON API at /api/events (UTC datetimes)
+  - bhaktischoolnyc.com → Wix data-hook="events-card" attributes
+  - groupmuse.com       → .card-content divs; NYC filtered by EDT/EST timezone
+  - premabrooklyn.com   → Squarespace fluid-engine text-block parsing
+  - 113spring.com       → Shopify products.json; dates from "Offered on..." body
 """
 
 import asyncio
@@ -54,7 +59,7 @@ def _today() -> Date:
     return datetime.now(tz=NYC_TZ).date()
 
 def _week_end() -> Date:
-    return _today() + timedelta(days=7)
+    return _today() + timedelta(days=14)
 
 def in_week(d: Date) -> bool:
     return _today() <= d <= _week_end()
@@ -821,12 +826,331 @@ def extract_souk(soup: BeautifulSoup, source_url: str) -> list[dict]:
     return events
 
 
+# ── Site-specific: Satsang NYC (public JSON API) ─────────────────────────────
+
+SATSANG_API = "https://www.satsangnyc.com/api/events"
+
+
+async def fetch_satsang_api(source_url: str) -> list[dict]:
+    try:
+        async with httpx.AsyncClient(headers=HTTP_HEADERS, timeout=15) as client:
+            r = await client.get(SATSANG_API)
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        print(f"  [satsang api error] {e}")
+        return []
+
+    events = []
+    for item in data:
+        start_str = item.get("startDateTime", "")
+        end_str = item.get("endDateTime", "")
+        if not start_str:
+            continue
+        try:
+            start_dt = datetime.fromisoformat(start_str).astimezone(NYC_TZ)
+            end_dt = datetime.fromisoformat(end_str).astimezone(NYC_TZ) if end_str else None
+        except Exception:
+            continue
+
+        d = start_dt.date()
+        t_start = start_dt.strftime("%-I:%M %p")
+        t_end = end_dt.strftime("%-I:%M %p") if end_dt else None
+        time_str = f"{t_start} – {t_end}" if t_end and t_start != t_end else t_start
+
+        name = item.get("name", "")
+        desc = item.get("description", "")
+        center = item.get("center", "")
+        url = item.get("link") or item.get("registrationLink") or source_url
+
+        evt = make_event(title=name, date_obj=d, time_str=time_str,
+                         description=desc, location=center,
+                         url=url, source_url=source_url)
+        if evt:
+            events.append(evt)
+
+    return dedup(events)
+
+
+# ── Site-specific: Bhakti School NYC (Wix data-hook attributes) ───────────────
+
+def extract_bhaktischool(soup: BeautifulSoup, source_url: str) -> list[dict]:
+    events = []
+    for card in soup.find_all(attrs={"data-hook": "events-card"}):
+        title_el = card.find(attrs={"data-hook": "title"})
+        date_el = card.find(attrs={"data-hook": "short-date"})
+        link_el = card.find("a", href=True)
+
+        title = title_el.get_text(strip=True) if title_el else ""
+        date_text = date_el.get_text(strip=True) if date_el else ""
+        url = link_el["href"] if link_el else source_url
+
+        d = parse_date(date_text)
+        evt = make_event(title=title, date_obj=d, url=url, source_url=source_url)
+        if evt:
+            events.append(evt)
+    return dedup(events)
+
+
+# ── Site-specific: Groupmuse (NYC events only via EDT/EST filter) ─────────────
+
+def extract_groupmuse(soup: BeautifulSoup, source_url: str) -> list[dict]:
+    events = []
+    for card in soup.find_all("div", class_="card-content"):
+        parts = [p.strip() for p in card.get_text(separator="|", strip=True).split("|")]
+
+        # Only NYC events have EDT or EST timezone markers
+        try:
+            tz_idx = next(i for i, p in enumerate(parts) if p in ("EDT", "EST", "ET"))
+        except StopIteration:
+            continue
+
+        if tz_idx < 1:
+            continue
+
+        title = parts[0]
+        datetime_str = parts[tz_idx - 1]  # e.g. "Tuesday, Apr  7  7:00 PM"
+
+        d = parse_date(datetime_str)
+        t = parse_time(datetime_str)
+
+        location = None
+        try:
+            nbhd_idx = next(i for i, p in enumerate(parts)
+                            if "neighborhood" in p.lower() or "location" in p.lower())
+            location = parts[nbhd_idx + 1] if nbhd_idx + 1 < len(parts) else None
+        except StopIteration:
+            pass
+
+        link_el = card.find("a", href=True)
+        if not link_el:
+            parent = card.find_parent(class_=re.compile(r"\bcard\b"))
+            link_el = parent.find("a", href=True) if parent else None
+        url = link_el["href"] if link_el else source_url
+        if url and url.startswith("/"):
+            url = "https://www.groupmuse.com" + url
+
+        evt = make_event(title=title, date_obj=d, time_str=t,
+                         location=location, url=url, source_url=source_url)
+        if evt:
+            events.append(evt)
+    return dedup(events)
+
+
+# ── Site-specific: Prema Brooklyn (Squarespace fluid-engine text blocks) ──────
+
+_PREMA_DOW_PREFIX_RE = re.compile(
+    r"^(?:mondays?|tuesdays?|wednesdays?|thursdays?|fridays?|saturdays?|sundays?)"
+    r"\s*\|?\s*",
+    re.IGNORECASE,
+)
+
+
+def _prema_parse_date_line(line: str) -> list:
+    """Return a list of Date objects parsed from one Prema date line.
+
+    Handles formats like:
+      "Thursday April 9"
+      "Saturday | April 18th"
+      "Sundays | April 19th, May 17th, June 7th"
+      "Thursdays | April 23rd, 30th, May 7th"
+    """
+    clean = _PREMA_DOW_PREFIX_RE.sub("", line).strip()
+    parts = re.split(r",\s*(?:and\s+)?|\s+and\s+", clean)
+
+    result = []
+    current_month: Optional[str] = None
+
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+
+        m = re.match(
+            r"^(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?"
+            r"|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?"
+            r"|nov(?:ember)?|dec(?:ember)?)\w*",
+            part, re.IGNORECASE,
+        )
+        if m:
+            current_month = m.group(0)
+            d = parse_date(part)
+        elif current_month and re.match(r"^\d{1,2}(?:st|nd|rd|th)?$", part, re.IGNORECASE):
+            d = parse_date(f"{current_month} {part}")
+        else:
+            d = parse_date(part)
+
+        if d:
+            result.append(d)
+
+    return result
+
+
+def extract_prema(soup: BeautifulSoup, source_url: str) -> list[dict]:
+    for tag in soup.find_all(["script", "style", "svg", "noscript"]):
+        tag.decompose()
+
+    text = soup.get_text(separator="\n", strip=True)
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+
+    # Split into event blocks delimited by "MORE INFO"
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    for line in lines:
+        if re.match(r"^more\s+info\s*$", line, re.IGNORECASE):
+            if current:
+                blocks.append(current[:])
+            current = []
+        else:
+            current.append(line)
+
+    events = []
+    for block in blocks:
+        # Find the first time-pattern line
+        time_idx = None
+        for i, line in enumerate(block):
+            if TIME_RE.search(line) or TIME_RANGE_NO_AMPM_RE.search(line):
+                time_idx = i
+                break
+
+        if time_idx is None or time_idx + 1 >= len(block):
+            continue
+
+        title = block[time_idx + 1]
+        if not title:
+            continue
+        time_str = parse_time(block[time_idx])
+
+        # Date lines are everything before the time line, excluding "with …" lines
+        date_lines = [l for l in block[:time_idx]
+                      if not re.match(r"^with\s+", l, re.IGNORECASE)]
+
+        all_dates = []
+        for dl in date_lines:
+            all_dates.extend(_prema_parse_date_line(dl))
+
+        for d in all_dates:
+            evt = make_event(title=title, date_obj=d, time_str=time_str,
+                             source_url=source_url)
+            if evt:
+                events.append(evt)
+
+    return dedup(events)
+
+
+# ── Site-specific: 113 Spring (Shopify products.json; "Offered on" dates) ─────
+
+_113SPRING_API = "https://113spring.com/collections/all/products.json?limit=100"
+_113SPRING_OFFERED_RE = re.compile(
+    r"Offered\s+on\s+(.*?)(?=\s+\d+\s+minutes|\s+Complimentary|This\s+event|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+async def fetch_113spring_api(source_url: str) -> list[dict]:
+    try:
+        async with httpx.AsyncClient(headers=HTTP_HEADERS, timeout=15) as client:
+            r = await client.get(_113SPRING_API, follow_redirects=True)
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        print(f"  [113spring api error] {e}")
+        return []
+
+    events = []
+    for product in data.get("products", []):
+        title = product.get("title", "").strip()
+        handle = product.get("handle", "")
+        url = f"https://113spring.com/products/{handle}"
+
+        body_html = product.get("body_html", "")
+        body_text = re.sub(r"<[^>]+>", " ", body_html)
+        body_text = unescape(body_text)
+        body_text = re.sub(r"\s+", " ", body_text).strip()
+
+        m = _113SPRING_OFFERED_RE.search(body_text)
+        if not m:
+            continue
+
+        date_text = re.sub(r"\s+", " ", m.group(1)).strip().rstrip(".")
+
+        # Parse comma/and-separated dates with carry-forward month logic
+        parts = re.split(r",\s*(?:and\s+)?|\s+and\s+", date_text)
+        current_month: Optional[str] = None
+        seen: set = set()
+
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+
+            month_m = re.match(
+                r"^(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?"
+                r"|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?"
+                r"|nov(?:ember)?|dec(?:ember)?)\w*",
+                part, re.IGNORECASE,
+            )
+            if month_m:
+                current_month = month_m.group(0)
+                d = parse_date(part)
+            elif current_month and re.match(r"^\d{1,2}(?:st|nd|rd|th)?$", part, re.IGNORECASE):
+                d = parse_date(f"{current_month} {part}")
+            else:
+                d = parse_date(part)
+
+            if d and d not in seen:
+                seen.add(d)
+                evt = make_event(title=title, date_obj=d, url=url,
+                                 source_url=source_url)
+                if evt:
+                    events.append(evt)
+
+    return dedup(events)
+
+
+# ── Site-specific: Bhakti Center (Avia builder card grid) ─────────────────────
+#
+# Each event is a div.flex_column.av_one_fourth.avia-link-column containing:
+#   - data-link-column-url  → event page URL
+#   - img[title]            → event name (the visible card image has a title attr)
+#   - section.av_textblock_section p → date text e.g. "saturday, april 4th"
+
+def extract_bhakticenter(soup: BeautifulSoup, source_url: str) -> list[dict]:
+    events = []
+    for div in soup.find_all("div", class_=lambda c: c and "avia-link-column" in c):
+        url = div.get("data-link-column-url", "").strip() or source_url
+
+        img = div.find("img", title=True)
+        title = img["title"].strip() if img else None
+        # Skip missing titles or WordPress dimension strings like "1080 x 1234 (1)"
+        if not title or re.match(r"^\d+\s*[x×]\s*\d+", title):
+            continue
+
+        date_p = div.find("section", class_="av_textblock_section")
+        if not date_p:
+            continue
+        date_text = date_p.get_text(strip=True)
+
+        d = parse_date(date_text)
+        if not d:
+            continue
+
+        evt = make_event(title=title, date_obj=d, url=url, source_url=source_url)
+        if evt:
+            events.append(evt)
+    return dedup(events)
+
+
 SITE_EXTRACTORS = {
-    "yogamaya.com":   extract_yogamaya,
-    "thus.org":       extract_thus,
-    "kulayoga.com":   extract_kula,
-    "ohmcenter.com":  extract_ohm,
-    "soukstudio.com": extract_souk,
+    "yogamaya.com":       extract_yogamaya,
+    "thus.org":           extract_thus,
+    "kulayoga.com":       extract_kula,
+    "ohmcenter.com":      extract_ohm,
+    "soukstudio.com":     extract_souk,
+    "bhaktischoolnyc.com": extract_bhaktischool,
+    "bhakticenter.org":   extract_bhakticenter,
+    "groupmuse.com":      extract_groupmuse,
+    "premabrooklyn.com":  extract_prema,
 }
 
 
@@ -865,7 +1189,7 @@ async def fetch_page(url: str, client: httpx.AsyncClient) -> str:
 
 
 # Sites that block httpx via TLS fingerprinting but allow curl
-CURL_DOMAINS = {"soukstudio.com"}
+CURL_DOMAINS = {"soukstudio.com", "bhakticenter.org"}
 
 
 async def fetch_via_curl(url: str) -> str:
@@ -896,6 +1220,10 @@ async def scrape_source(source: dict, client: httpx.AsyncClient,
             events = await fetch_kinlia_events(source["url"])
         elif "thus.org" in source["url"]:
             events = await fetch_thus_api(source["url"])
+        elif "satsangnyc.com" in source["url"]:
+            events = await fetch_satsang_api(source["url"])
+        elif "113spring.com" in source["url"]:
+            events = await fetch_113spring_api(source["url"])
         elif any(d in source["url"] for d in CURL_DOMAINS):
             html = await fetch_via_curl(source["url"])
             if not html:
@@ -939,8 +1267,9 @@ def load_static_events(path: str = "static_events.json") -> list[dict]:
 
 async def scrape_all(sources: list[dict]) -> list[dict]:
     semaphore = asyncio.Semaphore(CONCURRENCY)
+    active = [s for s in sources if s.get("status", "active") != "inactive"]
     async with httpx.AsyncClient(headers=HTTP_HEADERS) as client:
-        tasks = [scrape_source(s, client, semaphore) for s in sources]
+        tasks = [scrape_source(s, client, semaphore) for s in active]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
     all_events: list[dict] = []

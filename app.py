@@ -41,7 +41,7 @@ def save_cache(events):
 
 def build_week_days():
     today = datetime.now(tz=ZoneInfo("America/New_York")).date()
-    return [(today + timedelta(days=i)).isoformat() for i in range(7)]
+    return [(today + timedelta(days=i)).isoformat() for i in range(14)]
 
 
 @app.route("/")
