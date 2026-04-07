@@ -65,6 +65,27 @@ SOURCES = [
         "status": "inactive",
         "note": "Cloudflare managed JS challenge — all endpoints blocked, requires headless browser",
     },
+    {
+        "name": "ISHTA Yoga — Workshops",
+        "url": "https://ishtayoga.com/workshops",
+        "category": "Yoga",
+        "status": "active",
+        "note": "Squarespace eventlist-event; absolute URLs resolved from relative hrefs",
+    },
+    {
+        "name": "ISHTA Yoga — Events",
+        "url": "https://ishtayoga.com/info-sessions",
+        "category": "Yoga",
+        "status": "active",
+        "note": "Squarespace eventlist-event; teacher training info sessions",
+    },
+    {
+        "name": "Life Shop NY",
+        "url": "https://www.lifeshopny.com/events",
+        "category": "General",
+        "status": "active",
+        "note": "Wix SSR; renders next upcoming event via data-hook='event-title'/'event-full-date'",
+    },
     # ── New ───────────────────────────────────────────────────────────────────
     {
         "name": "Satsang NYC",

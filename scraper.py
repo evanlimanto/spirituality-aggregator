@@ -20,6 +20,8 @@ Site-specific extractors (keyed by domain substring):
   - groupmuse.com       → .card-content divs; NYC filtered by EDT/EST timezone
   - premabrooklyn.com   → Squarespace fluid-engine text-block parsing
   - 113spring.com       → Shopify products.json; dates from "Offered on..." body
+  - lifeshopny.com      → Wix data-hook="event-title"/"event-full-date" (SSR single-event)
+  - ishtayoga.com       → Squarespace eventlist-event; start time from event-time-localized-start
 """
 
 import asyncio
@@ -950,6 +952,48 @@ def extract_bhaktischool(soup: BeautifulSoup, source_url: str) -> list[dict]:
     return dedup(events)
 
 
+# ── Site-specific: ISHTA Yoga (Squarespace eventlist; absolute URLs) ─────────
+
+def extract_ishtayoga(soup: BeautifulSoup, source_url: str) -> list[dict]:
+    events = []
+    base = "https://ishtayoga.com"
+    for el in soup.find_all(class_=re.compile(r"eventlist-event", re.I)):
+        title_el = el.find(class_=re.compile(r"eventlist-title", re.I)) or el.find(["h1", "h2", "h3"])
+        title = title_el.get_text(strip=True) if title_el else ""
+
+        date_el = el.find("time", class_="event-date")
+        d, _ = parse_datetime_attr(date_el.get("datetime", "")) if date_el else (None, None)
+
+        start_el = el.find("time", class_="event-time-localized-start")
+        t = parse_time(start_el.get_text(strip=True)) if start_el else None
+
+        link_el = el.find("a", class_="eventlist-title-link") or el.find("a", href=True)
+        href = link_el["href"] if link_el else ""
+        url = (base + href) if href.startswith("/") else (href or source_url)
+
+        evt = make_event(title=title, date_obj=d, time_str=t, url=url, source_url=source_url)
+        if evt:
+            events.append(evt)
+    return dedup(events)
+
+
+# ── Site-specific: Life Shop NY (Wix SSR; shows next upcoming event) ─────────
+
+def extract_lifeshop(soup: BeautifulSoup, source_url: str) -> list[dict]:
+    events = []
+    titles = soup.find_all(attrs={"data-hook": "event-title"})
+    dates = soup.find_all(attrs={"data-hook": "event-full-date"})
+    for title_el, date_el in zip(titles, dates):
+        title = title_el.get_text(strip=True)
+        date_text = date_el.get_text(strip=True)  # e.g. "Apr 07, 2026, 8:00 PM – 10:15 PM"
+        d = parse_date(date_text)
+        t = parse_time(date_text)
+        evt = make_event(title=title, date_obj=d, time_str=t, url=source_url, source_url=source_url)
+        if evt:
+            events.append(evt)
+    return dedup(events)
+
+
 # ── Site-specific: Groupmuse (NYC events only via EDT/EST filter) ─────────────
 
 def extract_groupmuse(soup: BeautifulSoup, source_url: str) -> list[dict]:
@@ -1207,6 +1251,8 @@ SITE_EXTRACTORS = {
     "soukstudio.com":     extract_souk,
     "bhaktischoolnyc.com": extract_bhaktischool,
     "bhakticenter.org":   extract_bhakticenter,
+    "lifeshopny.com":     extract_lifeshop,
+    "ishtayoga.com":      extract_ishtayoga,
     "groupmuse.com":      extract_groupmuse,
     "premabrooklyn.com":  extract_prema,
 }
