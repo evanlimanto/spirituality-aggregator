@@ -58,6 +58,13 @@ SOURCES = [
         "status": "active",
         "note": "The Events Calendar REST API at /wp-json/tribe/events/v1/events",
     },
+    {
+        "name": "Bhakti Marga",
+        "url": "https://bhaktimarga.us/pages/calendar",
+        "category": "Spiritual",
+        "status": "inactive",
+        "note": "Cloudflare managed JS challenge — all endpoints blocked, requires headless browser",
+    },
     # ── New ───────────────────────────────────────────────────────────────────
     {
         "name": "Satsang NYC",
