@@ -51,6 +51,13 @@ SOURCES = [
         "status": "active",
         "note": "Avia builder card grid; img[title] + textblock date; curl required",
     },
+    {
+        "name": "Broome Street Ganesh",
+        "url": "https://broomestreetganesh.org/events-calendar/",
+        "category": "Spiritual",
+        "status": "active",
+        "note": "The Events Calendar REST API at /wp-json/tribe/events/v1/events",
+    },
     # ── New ───────────────────────────────────────────────────────────────────
     {
         "name": "Satsang NYC",

@@ -485,10 +485,14 @@ async def fetch_kinlia_events(source_url: str) -> list[dict]:
         if not start_str:
             continue
 
-        # Convert UTC → NYC local time
+        # The API returns times with a Z suffix but they are actually in the
+        # event's local timezone (item["timezone"], always "America/New_York").
+        # Strip the Z and parse as naive local time to avoid a spurious UTC shift.
         try:
-            start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00")).astimezone(NYC_TZ)
-            end_dt   = datetime.fromisoformat(end_str.replace("Z", "+00:00")).astimezone(NYC_TZ) if end_str else None
+            tz_name = item.get("timezone") or "America/New_York"
+            tz = ZoneInfo(tz_name)
+            start_dt = datetime.fromisoformat(start_str.rstrip("Z")).replace(tzinfo=tz)
+            end_dt   = datetime.fromisoformat(end_str.rstrip("Z")).replace(tzinfo=tz) if end_str else None
         except Exception:
             continue
 
@@ -505,6 +509,60 @@ async def fetch_kinlia_events(source_url: str) -> list[dict]:
 
         evt = make_event(title=title, date_obj=d, time_str=time_str,
                          description=desc, url=url, location=location,
+                         source_url=source_url)
+        if evt:
+            events.append(evt)
+
+    return dedup(events)
+
+
+# ── Site-specific: Broome Street Ganesh (The Events Calendar REST API) ────────
+
+BSG_API = (
+    "https://broomestreetganesh.org/wp-json/tribe/events/v1/events"
+    "?per_page=50&status=publish"
+)
+
+
+async def fetch_bsg_events(source_url: str) -> list[dict]:
+    """Fetch events from The Events Calendar REST API on broomestreetganesh.org."""
+    from datetime import date as Date
+    today = Date.today().isoformat()
+    url = f"{BSG_API}&start_date={today}"
+    try:
+        async with httpx.AsyncClient(headers=HTTP_HEADERS, timeout=15) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        print(f"  [bsg api error] {e}")
+        return []
+
+    events = []
+    for item in data.get("events", []):
+        start_str = item.get("start_date", "")
+        end_str   = item.get("end_date", "")
+        if not start_str:
+            continue
+
+        try:
+            tz = ZoneInfo(item.get("timezone") or "America/New_York")
+            start_dt = datetime.fromisoformat(start_str).replace(tzinfo=tz)
+            end_dt   = datetime.fromisoformat(end_str).replace(tzinfo=tz) if end_str else None
+        except Exception:
+            continue
+
+        d = start_dt.date()
+        t_start = start_dt.strftime("%-I:%M %p")
+        t_end   = end_dt.strftime("%-I:%M %p") if end_dt else None
+        time_str = f"{t_start} – {t_end}" if t_end and t_start != t_end else t_start
+
+        title = unescape(item.get("title", ""))
+        desc  = item.get("description") or ""
+        evt_url = item.get("url") or source_url
+
+        evt = make_event(title=title, date_obj=d, time_str=time_str,
+                         description=desc, url=evt_url, location=None,
                          source_url=source_url)
         if evt:
             events.append(evt)
@@ -1222,6 +1280,8 @@ async def scrape_source(source: dict, client: httpx.AsyncClient,
             events = await fetch_thus_api(source["url"])
         elif "satsangnyc.com" in source["url"]:
             events = await fetch_satsang_api(source["url"])
+        elif "broomestreetganesh.org" in source["url"]:
+            events = await fetch_bsg_events(source["url"])
         elif "113spring.com" in source["url"]:
             events = await fetch_113spring_api(source["url"])
         elif any(d in source["url"] for d in CURL_DOMAINS):
