@@ -263,13 +263,38 @@
       line-height: 1.5;
     }
 
-    .card-source {
-      font-size: 0.72rem;
-      color: var(--muted);
+    .card-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
       border-top: 1px solid var(--border);
       padding-top: 7px;
       margin-top: 2px;
+      gap: 8px;
     }
+
+    .card-source {
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+
+    .gcal-btn {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-family: "Inter", sans-serif;
+      cursor: pointer;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .gcal-btn:hover { border-color: #4285f4; color: #4285f4; background: #f0f4ff; }
 
     /* ── Sources view ── */
     .sources-intro {
@@ -442,6 +467,49 @@
     return "";
   }
 
+  function gcalUrl(evt) {
+    const d = evt.date.replace(/-/g, '');
+
+    function toHMS(timeStr) {
+      const m = timeStr && timeStr.match(/(\d+):(\d+)\s*(AM|PM)/i);
+      if (!m) return null;
+      let h = parseInt(m[1]), min = parseInt(m[2]);
+      const ap = m[3].toUpperCase();
+      if (ap === 'PM' && h !== 12) h += 12;
+      if (ap === 'AM' && h === 12) h = 0;
+      return String(h).padStart(2,'0') + String(min).padStart(2,'0') + '00';
+    }
+
+    let dates;
+    if (evt.time) {
+      const parts = evt.time.split(/\s*[–—\-]\s*/);
+      const start = toHMS(parts[0]);
+      const end   = parts[1] ? toHMS(parts[1]) : null;
+      if (start) {
+        const endTime = end || (String(parseInt(start.slice(0,2)) + 1).padStart(2,'0') + start.slice(2));
+        dates = `${d}T${start}/${d}T${endTime}`;
+      }
+    }
+    if (!dates) {
+      const [y, mo, dy] = evt.date.split('-').map(Number);
+      const next = new Date(y, mo - 1, dy + 1);
+      const nd = `${next.getFullYear()}${String(next.getMonth()+1).padStart(2,'0')}${String(next.getDate()).padStart(2,'0')}`;
+      dates = `${d}/${nd}`;
+    }
+
+    const params = new URLSearchParams({ action: 'TEMPLATE', text: evt.title, dates, ctz: 'America/New_York' });
+    if (evt.location) params.set('location', evt.location);
+    const details = [evt.description, evt.event_url].filter(Boolean).join('\n\n');
+    if (details) params.set('details', details);
+    return `https://calendar.google.com/calendar/render?${params}`;
+  }
+
+  function openGcal(e, btn) {
+    e.preventDefault();
+    e.stopPropagation();
+    window.open(btn.dataset.gcal, '_blank');
+  }
+
   function parseTime(t) {
     if (!t) return 9999;
     const m = t.match(/(\d+):(\d+)\s*(AM|PM)/i);
@@ -507,7 +575,13 @@
           ${evt.location ? `<div class="meta-row">${icon("loc")} ${esc(evt.location)}</div>` : ""}
         </div>
         ${evt.description ? `<div class="card-desc">${esc(evt.description)}</div>` : ""}
-        <div class="card-source">${esc(evt.source)}</div>
+        <div class="card-footer">
+          <span class="card-source">${esc(evt.source)}</span>
+          <button class="gcal-btn" data-gcal="${esc(gcalUrl(evt))}" onclick="openGcal(event, this)" title="Add to Google Calendar">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            Add
+          </button>
+        </div>
       </a>`;
   }
 
