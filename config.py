@@ -66,6 +66,13 @@ SOURCES = [
         "note": "Cloudflare managed JS challenge — all endpoints blocked, requires headless browser",
     },
     {
+        "name": "Bhakti Marga NYC",
+        "url": "https://bhaktimarga.nyc/pages/events",
+        "category": "Spiritual",
+        "status": "inactive",
+        "note": "Events hosted on Momence (fully JS-rendered) — no dates in static HTML, not scrapable without headless browser",
+    },
+    {
         "name": "ISHTA Yoga — Workshops",
         "url": "https://ishtayoga.com/workshops",
         "category": "Yoga",
