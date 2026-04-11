@@ -130,6 +130,13 @@ SOURCES = [
         "note": "Shopify products.json; dates from 'Offered on...' body text",
     },
     {
+        "name": "Third Door Brooklyn",
+        "url": "https://www.tickettailor.com/events/thirddoorbrooklyn",
+        "category": "Spiritual",
+        "status": "active",
+        "note": "Ticket Tailor public events listing; server-rendered HTML with JSON-LD and event cards",
+    },
+    {
         "name": "NYC City Center (SRF)",
         "url": "https://newyorkcitycenter.org/calendar-of-events",
         "category": "Spiritual",

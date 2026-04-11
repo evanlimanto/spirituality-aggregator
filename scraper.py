@@ -22,6 +22,7 @@ Site-specific extractors (keyed by domain substring):
   - 113spring.com       → Shopify products.json; dates from "Offered on..." body
   - lifeshopny.com      → Wix data-hook="event-title"/"event-full-date" (SSR single-event)
   - ishtayoga.com       → Squarespace eventlist-event; start time from event-time-localized-start
+  - tickettailor.com    → JSON-LD first, then server-rendered event cards
 """
 
 import asyncio
@@ -1243,18 +1244,65 @@ def extract_bhakticenter(soup: BeautifulSoup, source_url: str) -> list[dict]:
     return dedup(events)
 
 
+# ── Site-specific: Ticket Tailor (/events/<organiser>) ────────────────────────
+
+def extract_tickettailor(soup: BeautifulSoup, source_url: str) -> list[dict]:
+    """Ticket Tailor public events listing page.
+
+    Tries JSON-LD structured data first, then falls back to parsing
+    Ticket Tailor's server-rendered event cards.
+    """
+    base = "https://www.tickettailor.com"
+
+    # 1. JSON-LD (Ticket Tailor includes Schema.org Event markup)
+    events = extract_jsonld(soup, source_url)
+    if events:
+        return events
+
+    # 2. Server-rendered event cards
+    for card in soup.find_all(["div", "li", "article"],
+                               class_=re.compile(r"\bevent\b", re.I)):
+        title_el = card.find(["h1", "h2", "h3", "h4"])
+        if not title_el:
+            continue
+        title = title_el.get_text(strip=True)
+
+        # Prefer <time datetime="...">
+        time_el = card.find("time", attrs={"datetime": True})
+        d, t = None, None
+        if time_el:
+            d, t = parse_datetime_attr(time_el.get("datetime", ""))
+
+        # Fall back to text-based date parsing within the card
+        if not d:
+            card_text = card.get_text(" ", strip=True)
+            d = parse_date(card_text)
+            t = t or parse_time(card_text)
+
+        link_el = card.find("a", href=True)
+        href = link_el["href"] if link_el else ""
+        url = (base + href) if href.startswith("/") else (href or source_url)
+
+        evt = make_event(title=title, date_obj=d, time_str=t, url=url, source_url=source_url)
+        if evt:
+            events.append(evt)
+
+    return dedup(events)
+
+
 SITE_EXTRACTORS = {
-    "yogamaya.com":       extract_yogamaya,
-    "thus.org":           extract_thus,
-    "kulayoga.com":       extract_kula,
-    "ohmcenter.com":      extract_ohm,
-    "soukstudio.com":     extract_souk,
+    "yogamaya.com":        extract_yogamaya,
+    "thus.org":            extract_thus,
+    "kulayoga.com":        extract_kula,
+    "ohmcenter.com":       extract_ohm,
+    "soukstudio.com":      extract_souk,
     "bhaktischoolnyc.com": extract_bhaktischool,
-    "bhakticenter.org":   extract_bhakticenter,
-    "lifeshopny.com":     extract_lifeshop,
-    "ishtayoga.com":      extract_ishtayoga,
-    "groupmuse.com":      extract_groupmuse,
-    "premabrooklyn.com":  extract_prema,
+    "bhakticenter.org":    extract_bhakticenter,
+    "lifeshopny.com":      extract_lifeshop,
+    "ishtayoga.com":       extract_ishtayoga,
+    "groupmuse.com":       extract_groupmuse,
+    "premabrooklyn.com":   extract_prema,
+    "tickettailor.com":    extract_tickettailor,
 }
 
 
