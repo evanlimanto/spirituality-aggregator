@@ -834,7 +834,8 @@ def dedup(events: list[dict]) -> list[dict]:
     seen: set = set()
     out = []
     for e in events:
-        key = (e["title"].lower()[:40], e["date"])
+        norm_title = re.sub(r'[^a-z0-9]', '', e["title"].lower())[:40]
+        key = (norm_title, e["date"])
         if key not in seen:
             seen.add(key)
             out.append(e)
@@ -1089,53 +1090,80 @@ def _prema_parse_date_line(line: str) -> list:
 
 
 def extract_prema(soup: BeautifulSoup, source_url: str) -> list[dict]:
+    from urllib.parse import urljoin
+
     for tag in soup.find_all(["script", "style", "svg", "noscript"]):
         tag.decompose()
+
+    # Collect "View Event →" link hrefs before stripping HTML, in document order.
+    event_urls = []
+    for a in soup.find_all("a", href=True):
+        if re.match(r"^view\s+event", a.get_text(strip=True), re.IGNORECASE):
+            event_urls.append(urljoin(source_url, a["href"]))
 
     text = soup.get_text(separator="\n", strip=True)
     lines = [l.strip() for l in text.splitlines() if l.strip()]
 
-    # Split into event blocks delimited by "MORE INFO"
+    # Split into event blocks delimited by "View Event →"
     blocks: list[list[str]] = []
     current: list[str] = []
     for line in lines:
-        if re.match(r"^more\s+info\s*$", line, re.IGNORECASE):
+        if re.match(r"^view\s+event", line, re.IGNORECASE):
             if current:
                 blocks.append(current[:])
             current = []
         else:
             current.append(line)
 
+    _NOISE = {"(map)", "google calendar", "ics"}
+
     events = []
-    for block in blocks:
-        # Find the first time-pattern line
-        time_idx = None
-        for i, line in enumerate(block):
-            if TIME_RE.search(line) or TIME_RANGE_NO_AMPM_RE.search(line):
-                time_idx = i
+    for i, block in enumerate(blocks):
+        event_url = event_urls[i] if i < len(event_urls) else source_url
+
+        # Find the full date line (e.g. "Sunday, April 12, 2026").
+        # The title is the line immediately before it; times follow immediately after.
+        date_line_idx = None
+        for j, line in enumerate(block):
+            if re.match(
+                r"^(?:mon|tue|wed|thu|fri|sat|sun)\w*,?\s+\w+\s+\d{1,2},?\s+\d{4}",
+                line, re.IGNORECASE,
+            ):
+                date_line_idx = j
                 break
 
-        if time_idx is None or time_idx + 1 >= len(block):
+        if date_line_idx is None or date_line_idx == 0:
             continue
 
-        title = block[time_idx + 1]
+        title = block[date_line_idx - 1]
         if not title:
             continue
-        time_str = parse_time(block[time_idx])
 
-        # Date lines are everything before the time line, excluding "with …" lines
-        date_lines = [l for l in block[:time_idx]
-                      if not re.match(r"^with\s+", l, re.IGNORECASE)]
+        d = parse_date(block[date_line_idx])
+        if not d:
+            continue
 
-        all_dates = []
-        for dl in date_lines:
-            all_dates.extend(_prema_parse_date_line(dl))
+        # Collect consecutive time lines after the date (stop at noise/description).
+        time_parts = []
+        for line in block[date_line_idx + 1:]:
+            if line.lower() in _NOISE:
+                break
+            if TIME_RE.search(line) or TIME_RANGE_NO_AMPM_RE.search(line):
+                time_parts.append(parse_time(line))
+            else:
+                break
 
-        for d in all_dates:
-            evt = make_event(title=title, date_obj=d, time_str=time_str,
-                             source_url=source_url)
-            if evt:
-                events.append(evt)
+        if len(time_parts) >= 2:
+            time_str = f"{time_parts[0]} – {time_parts[1]}"
+        elif time_parts:
+            time_str = time_parts[0]
+        else:
+            time_str = None
+
+        evt = make_event(title=title, date_obj=d, time_str=time_str,
+                         url=event_url, source_url=source_url)
+        if evt:
+            events.append(evt)
 
     return dedup(events)
 
