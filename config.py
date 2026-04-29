@@ -130,6 +130,27 @@ SOURCES = [
         "note": "Shopify products.json; dates from 'Offered on...' body text",
     },
     {
+        "name": "New Center NY",
+        "url": "https://www.newcenterny.org/events/",
+        "category": "General",
+        "status": "active",
+        "note": "WooCommerce event_ticket products; date encoded as M.D.YY in product name; member/non-member variants deduped",
+    },
+    {
+        "name": "Abhaya Yoga",
+        "url": "https://abhayayoga.com/events/",
+        "category": "Yoga",
+        "status": "inactive",
+        "note": "Events page returns 403 (Cloudflare); events load via MindBody healcode widget (widget-id=0719563ed44) — fully JS-rendered, no public API",
+    },
+    {
+        "name": "Solid Gold Yogi",
+        "url": "https://www.solidgoldyogi.com/solid-gold-workshops",
+        "category": "Yoga",
+        "status": "active",
+        "note": "Squarespace; events in announcementBarSettings JSON blob as 'Day, Mon DD HH:MMpm | Title' links",
+    },
+    {
         "name": "NYC City Center (SRF)",
         "url": "https://newyorkcitycenter.org/calendar-of-events",
         "category": "Spiritual",

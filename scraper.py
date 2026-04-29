@@ -22,6 +22,8 @@ Site-specific extractors (keyed by domain substring):
   - 113spring.com       → Shopify products.json; dates from "Offered on..." body
   - lifeshopny.com      → Wix data-hook="event-title"/"event-full-date" (SSR single-event)
   - ishtayoga.com       → Squarespace eventlist-event; start time from event-time-localized-start
+  - newcenterny.org     → WooCommerce store API (event_ticket products); date as M.D.YY in name
+  - solidgoldyogi.com   → Squarespace announcementBarSettings JSON blob; "Day Mon D H:MMpm | Title"
 """
 
 import asyncio
@@ -1271,6 +1273,97 @@ def extract_bhakticenter(soup: BeautifulSoup, source_url: str) -> list[dict]:
     return dedup(events)
 
 
+# ── Site-specific: New Center NY ─────────────────────────────────────────────
+#
+# Events are WooCommerce products of type "event_ticket".  The date is encoded
+# in the product name as M.D.YY (e.g. "Family Constellations 4.25.26").
+# Member/Non-Member ticket variants have identical titles after suffix removal
+# and are collapsed by dedup().
+
+_NEWCENTER_DATE_RE = re.compile(r'\s*\b(\d{1,2})\.(\d{1,2})\.(\d{2})\b\s*$')
+_NEWCENTER_SUFFIX_RE = re.compile(
+    r'\s*[-–]\s*(non-?members?|members?|nonmembers?)\s*$', re.IGNORECASE
+)
+_NEWCENTER_API = "https://www.newcenterny.org/wp-json/wc/store/v1/products"
+
+
+async def fetch_newcenter_api(source_url: str) -> list[dict]:
+    try:
+        async with httpx.AsyncClient(headers=HTTP_HEADERS, timeout=20) as client:
+            r = await client.get(_NEWCENTER_API, params={"per_page": 100},
+                                 follow_redirects=True)
+            r.raise_for_status()
+            products = r.json()
+    except Exception as e:
+        print(f"  [newcenter] fetch error: {e}")
+        return []
+
+    events = []
+    for p in products:
+        name = unescape(p.get("name", ""))
+        # Strip member/non-member ticket variant suffix
+        name = _NEWCENTER_SUFFIX_RE.sub("", name).strip()
+        # Extract and remove trailing M.D.YY date
+        m = _NEWCENTER_DATE_RE.search(name)
+        if not m:
+            continue
+        try:
+            d = Date(2000 + int(m.group(3)), int(m.group(1)), int(m.group(2)))
+        except ValueError:
+            continue
+        title = _NEWCENTER_DATE_RE.sub("", name).strip()
+        url = p.get("permalink") or source_url
+        evt = make_event(title=title, date_obj=d, url=url, source_url=source_url)
+        if evt:
+            events.append(evt)
+
+    return dedup(events)
+
+
+# ── Site-specific: Solid Gold Yogi ───────────────────────────────────────────
+#
+# Events are listed in the Squarespace announcementBarSettings JSON blob
+# embedded in the page HTML.  Each event is a link whose text matches:
+#   "Day, Mon DD H:MMpm | Title"   (weekday prefix optional, comma optional)
+# All links point to /solid-gold-workshops rather than individual pages.
+
+async def fetch_solidgoldyogi(source_url: str) -> list[dict]:
+    try:
+        async with httpx.AsyncClient(headers=HTTP_HEADERS, timeout=20) as client:
+            r = await client.get(source_url, follow_redirects=True)
+            r.raise_for_status()
+            html = r.text
+    except Exception as e:
+        print(f"  [solidgoldyogi] fetch error: {e}")
+        return []
+
+    # Links in the JSON-escaped HTML look like:
+    #   <a href=\"/solid-gold-workshops\">Saturday, Apr 11 7:30pm | Naada</a>
+    raw_links = re.findall(
+        r'href=\\"?/solid-gold-workshops\\"?[^>]*>\s*([^<]+?)\s*</a>',
+        html,
+    )
+
+    events = []
+    for link_text in raw_links:
+        link_text = unescape(link_text)
+        if "|" not in link_text:
+            continue
+        date_time_part, _, title = link_text.partition("|")
+        title = title.strip()
+        date_time_part = date_time_part.strip()
+        if not title:
+            continue
+        d = parse_date(date_time_part)
+        t = parse_time(date_time_part)
+        evt = make_event(title=title, date_obj=d, time_str=t,
+                         url=source_url, source_url=source_url)
+        if evt:
+            events.append(evt)
+
+    return dedup(events)
+
+
 SITE_EXTRACTORS = {
     "yogamaya.com":       extract_yogamaya,
     "thus.org":           extract_thus,
@@ -1358,6 +1451,10 @@ async def scrape_source(source: dict, client: httpx.AsyncClient,
             events = await fetch_bsg_events(source["url"])
         elif "113spring.com" in source["url"]:
             events = await fetch_113spring_api(source["url"])
+        elif "solidgoldyogi.com" in source["url"]:
+            events = await fetch_solidgoldyogi(source["url"])
+        elif "newcenterny.org" in source["url"]:
+            events = await fetch_newcenter_api(source["url"])
         elif any(d in source["url"] for d in CURL_DOMAINS):
             html = await fetch_via_curl(source["url"])
             if not html:
