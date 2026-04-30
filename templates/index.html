@@ -374,6 +374,95 @@
     }
     .source-url:hover { opacity: 1; text-decoration: underline; }
 
+    /* ── Retreats view ── */
+    #view-retreats { padding: 28px 32px; }
+
+    .retreats-group { margin-bottom: 36px; }
+
+    .retreats-group-title {
+      font-family: "Cormorant Garamond", serif;
+      font-size: 1.05rem;
+      font-weight: 500;
+      color: var(--text);
+      margin-bottom: 14px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .retreats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 10px;
+    }
+
+    .retreat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      text-decoration: none;
+      color: inherit;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .retreat-card:hover {
+      border-color: var(--accent);
+      box-shadow: 0 2px 12px rgba(142, 123, 173, 0.1);
+    }
+
+    .retreat-card-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .retreat-title {
+      font-size: 0.9rem;
+      font-weight: 500;
+      line-height: 1.35;
+      color: var(--text);
+    }
+
+    .retreat-date-range {
+      font-size: 0.78rem;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .retreat-teachers {
+      font-size: 0.78rem;
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    .retreat-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-top: 1px solid var(--border);
+      padding-top: 7px;
+      margin-top: 2px;
+      gap: 8px;
+    }
+
+    #retreats-loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      padding: 80px 32px;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    @media (max-width: 600px) {
+      #view-retreats { padding: 20px 16px; }
+      .retreats-grid { grid-template-columns: 1fr; }
+    }
+
     /* ── Status bar ── */
     #status-bar {
       text-align: center;
@@ -409,6 +498,7 @@
   <div class="tabs">
     <button class="tab-btn active" onclick="showTab('events')">This Week</button>
     <button class="tab-btn" onclick="showTab('sources')">Sources</button>
+    <button class="tab-btn" onclick="showTab('retreats')">Retreats</button>
   </div>
 </header>
 
@@ -430,6 +520,14 @@
   <div id="sources-list"></div>
 </div>
 
+<div id="view-retreats" class="hidden">
+  <div id="retreats-loading" class="hidden">
+    <div class="spinner"></div>
+    <div>Gathering retreats &amp; trainings…</div>
+  </div>
+  <div id="retreats-list"></div>
+</div>
+
 <div id="status-bar" class="hidden"></div>
 
 <script>
@@ -437,6 +535,7 @@
 
   let allEvents = [];
   let allSources = [];
+  let allRetreats = [];
   let activeCategory = "all";
   let activeTab = "events";
 
@@ -526,14 +625,21 @@
   function showTab(tab) {
     activeTab = tab;
     document.querySelectorAll(".tab-btn").forEach((b, i) => {
-      b.classList.toggle("active", (i === 0 && tab === "events") || (i === 1 && tab === "sources"));
+      b.classList.toggle("active",
+        (i === 0 && tab === "events") ||
+        (i === 1 && tab === "sources") ||
+        (i === 2 && tab === "retreats"));
     });
     document.getElementById("view-events").classList.toggle("hidden", tab !== "events");
     document.getElementById("view-sources").classList.toggle("hidden", tab !== "sources");
+    document.getElementById("view-retreats").classList.toggle("hidden", tab !== "retreats");
     document.getElementById("filters").classList.toggle("hidden", tab !== "events");
 
     if (tab === "sources" && allSources.length === 0) {
       loadSources();
+    }
+    if (tab === "retreats" && allRetreats.length === 0) {
+      loadRetreats();
     }
   }
 
@@ -694,7 +800,91 @@
     }
   }
 
-  function refresh() { loadEvents("/api/refresh"); }
+  function refresh() {
+    if (activeTab === "retreats") {
+      loadRetreats("/api/retreats/refresh");
+    } else {
+      loadEvents("/api/refresh");
+    }
+  }
+
+  // ── Retreats view ──────────────────────────────────────────────────────────
+
+  const FULL_MONTH_NAMES = ["January","February","March","April","May","June",
+                             "July","August","September","October","November","December"];
+
+  function fmtDateRange(startStr, endStr) {
+    const [sy, sm, sd] = startStr.split("-").map(Number);
+    const startMonth = MONTH_NAMES[sm - 1];
+    if (!endStr) return `${startMonth} ${sd}, ${sy}`;
+    const [ey, em, ed] = endStr.split("-").map(Number);
+    if (sy === ey && sm === em) {
+      return `${startMonth} ${sd}–${ed}, ${sy}`;
+    }
+    return `${startMonth} ${sd} – ${MONTH_NAMES[em - 1]} ${ed}, ${ey}`;
+  }
+
+  function renderRetreatCard(r) {
+    const color = catColor(r.category);
+    const url = r.event_url || r.source_url || "#";
+    const dateRange = fmtDateRange(r.date_start, r.date_end);
+    return `
+      <a class="retreat-card" href="${esc(url)}" target="_blank" rel="noopener">
+        <div class="retreat-card-top">
+          <div class="retreat-title">${esc(r.title)}</div>
+          <span class="cat-badge" style="background:${color}18;color:${color}">${esc(r.category)}</span>
+        </div>
+        <div class="retreat-date-range">${esc(dateRange)}${r.location ? ` · ${esc(r.location)}` : ""}</div>
+        ${r.teachers ? `<div class="retreat-teachers">with ${esc(r.teachers)}</div>` : ""}
+        ${r.description ? `<div class="card-desc">${esc(r.description)}</div>` : ""}
+        <div class="retreat-footer">
+          <span class="card-source">${esc(r.source)}</span>
+          <span style="font-size:0.72rem;color:var(--accent)">View →</span>
+        </div>
+      </a>`;
+  }
+
+  function renderRetreats(retreats) {
+    const sorted = [...retreats].sort((a, b) => a.date_start.localeCompare(b.date_start));
+    const byMonth = {};
+    sorted.forEach(r => {
+      const [y, m] = r.date_start.split("-").map(Number);
+      const key = `${FULL_MONTH_NAMES[m - 1]} ${y}`;
+      if (!byMonth[key]) byMonth[key] = [];
+      byMonth[key].push(r);
+    });
+
+    const container = document.getElementById("retreats-list");
+    container.innerHTML = Object.entries(byMonth).map(([month, items]) => `
+      <div class="retreats-group">
+        <div class="retreats-group-title">${esc(month)}</div>
+        <div class="retreats-grid">${items.map(renderRetreatCard).join("")}</div>
+      </div>`).join("");
+
+    if (sorted.length === 0) {
+      container.innerHTML = `<p style="color:var(--muted);font-size:.85rem">No upcoming retreats found.</p>`;
+    }
+  }
+
+  async function loadRetreats(endpoint = "/api/retreats") {
+    document.getElementById("retreats-loading").classList.remove("hidden");
+    document.getElementById("retreats-list").innerHTML = "";
+    document.getElementById("refreshBtn").disabled = true;
+
+    try {
+      const method = endpoint.includes("refresh") ? "POST" : "GET";
+      const res = await fetch(endpoint, { method });
+      const data = await res.json();
+      allRetreats = data.retreats;
+      renderRetreats(allRetreats);
+    } catch (err) {
+      document.getElementById("retreats-list").innerHTML =
+        `<p style="color:#A03D3D;font-size:.85rem">Error loading retreats: ${err.message}</p>`;
+    } finally {
+      document.getElementById("retreats-loading").classList.add("hidden");
+      document.getElementById("refreshBtn").disabled = false;
+    }
+  }
 
   // Init
   showTab("events");

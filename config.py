@@ -3,6 +3,8 @@ CATEGORY_COLORS = {
     "Buddhism": "#fbbf24",   # amber
     "Spiritual": "#a78bfa",  # violet
     "General":  "#60a5fa",   # blue
+    "Retreat":  "#f97316",   # orange
+    "Training": "#06b6d4",   # cyan
 }
 
 SOURCES = [
@@ -170,5 +172,39 @@ SOURCES = [
         "category": "Yoga",
         "status": "inactive",
         "note": "Momence booking platform — fully JS-rendered, no public API found",
+    },
+    {
+        "name": "Baby Cobra Yoga",
+        "url": "https://www.tickettailor.com/events/babycobrayoga",
+        "category": "Yoga",
+        "status": "inactive",
+        "note": "Ticket Tailor — Cloudflare managed JS challenge, no public API",
+    },
+]
+
+RETREAT_SOURCES = [
+    {
+        "name": "Menla Retreat Center",
+        "url": "https://menla.org/retreats/",
+        "category": "Retreat",
+        "status": "active",
+    },
+    {
+        "name": "Megan Mook",
+        "url": "https://meganmook.com/retreats",
+        "category": "Retreat",
+        "status": "active",
+    },
+    {
+        "name": "Hakomi Institute",
+        "url": "https://hakomiinstitute.com/intro-workshops/",
+        "category": "Training",
+        "status": "active",
+    },
+    {
+        "name": "Omega Institute",
+        "url": "https://www.eomega.org/workshops/workshops-topic/workshops-retreats",
+        "category": "Retreat",
+        "status": "active",
     },
 ]

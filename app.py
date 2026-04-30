@@ -8,8 +8,8 @@ from zoneinfo import ZoneInfo
 
 from flask import Flask, jsonify, render_template, request
 
-from config import CATEGORY_COLORS, SOURCES
-from scraper import scrape_all
+from config import CATEGORY_COLORS, RETREAT_SOURCES, SOURCES
+from scraper import scrape_all, scrape_all_retreats
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -17,6 +17,7 @@ log = logging.getLogger(__name__)
 app = Flask(__name__)
 
 CACHE_FILE = "/tmp/event-aggregator-cache.json"
+RETREAT_CACHE_FILE = "/tmp/event-aggregator-retreats-cache.json"
 CACHE_TTL = 60 * 60  # 1 hour
 MIN_EVENTS_FOR_VALID_SCRAPE = 5  # don't overwrite cache with an empty/broken result
 
@@ -37,6 +38,24 @@ def load_cache():
 def save_cache(events):
     with open(CACHE_FILE, "w") as f:
         json.dump({"ts": time.time(), "events": events}, f)
+
+
+def load_retreat_cache():
+    if not os.path.exists(RETREAT_CACHE_FILE):
+        return None, None
+    try:
+        with open(RETREAT_CACHE_FILE) as f:
+            data = json.load(f)
+        if time.time() - data.get("ts", 0) < CACHE_TTL:
+            return data["retreats"], data.get("ts")
+    except Exception:
+        pass
+    return None, None
+
+
+def save_retreat_cache(retreats):
+    with open(RETREAT_CACHE_FILE, "w") as f:
+        json.dump({"ts": time.time(), "retreats": retreats}, f)
 
 
 def build_week_days():
@@ -65,6 +84,24 @@ def refresh_events():
     if os.path.exists(CACHE_FILE):
         os.remove(CACHE_FILE)
     return get_events()
+
+
+@app.route("/api/retreats")
+def get_retreats():
+    cached, ts = load_retreat_cache()
+    if cached is not None:
+        return jsonify({"retreats": cached, "cached": True, "scraped_at": ts})
+    ts = time.time()
+    retreats = asyncio.run(scrape_all_retreats(RETREAT_SOURCES))
+    save_retreat_cache(retreats)
+    return jsonify({"retreats": retreats, "cached": False, "scraped_at": ts})
+
+
+@app.route("/api/retreats/refresh", methods=["POST"])
+def refresh_retreats():
+    if os.path.exists(RETREAT_CACHE_FILE):
+        os.remove(RETREAT_CACHE_FILE)
+    return get_retreats()
 
 
 @app.route("/api/sources")

@@ -210,7 +210,8 @@ def parse_datetime_attr(s: str):
 
 _TITLE_BLACKLIST = re.compile(
     r"^(our most popular|follow a manual|view event|view schedule|book|sign in|"
-    r"more info|as well as|join us|skip to|click here|open menu|close menu)",
+    r"more info|as well as|join us|skip to|click here|open menu|close menu|"
+    r"clarification needed|invalid|error|undefined|null)",
     re.IGNORECASE,
 )
 
@@ -917,6 +918,9 @@ async def fetch_satsang_api(source_url: str) -> list[dict]:
             continue
 
         d = start_dt.date()
+        # Skip events at midnight — always an API error placeholder
+        if start_dt.hour == 0 and start_dt.minute == 0:
+            continue
         t_start = start_dt.strftime("%-I:%M %p")
         t_end = end_dt.strftime("%-I:%M %p") if end_dt else None
         time_str = f"{t_start} – {t_end}" if t_end and t_start != t_end else t_start
@@ -1515,3 +1519,388 @@ async def scrape_all(sources: list[dict]) -> list[dict]:
         print(f"  [static] loaded {len(static)} event(s) from static_events.json")
     all_events.extend(static)
     return dedup(all_events)
+
+
+# ── RETREATS ──────────────────────────────────────────────────────────────────
+
+def in_retreat_window(d: Date) -> bool:
+    return _today() <= d <= _today() + timedelta(days=365)
+
+
+def parse_retreat_date_range(text: str) -> tuple[Optional[Date], Optional[Date]]:
+    """Parse a date-range string into (start, end) Date objects.
+
+    Handles:
+      "Apr 29 - May 03, 2026"   different months
+      "July 15 - 19, 2026"      same month
+      "May 22 - 25"             same month, no year
+      "October 2-4, 2026"       compact hyphen
+      "May 2 - May 3"           both months, no year
+    """
+    text = text.strip()
+    # Normalise en-dash / em-dash to " - "
+    text = re.sub(r"\s*[–—]\s*", " - ", text)
+    # Collapse compact "M D-D" → "M D - D"
+    text = re.sub(r"(\b\d{1,2})-(\d{1,2}\b)", r"\1 - \2", text)
+
+    parts = text.split(" - ", 1)
+    if len(parts) != 2:
+        return (parse_date(text), None)
+
+    start_str, end_str = parts[0].strip(), parts[1].strip()
+    start = parse_date(start_str)
+    if start is None:
+        return (None, None)
+
+    # If end_str is just a number, inherit month (and year) from start
+    if re.fullmatch(r"\d{1,2}", end_str):
+        try:
+            end = start.replace(day=int(end_str))
+            if end < start:
+                # Rolled over a month boundary — bump month
+                if start.month == 12:
+                    end = end.replace(year=start.year + 1, month=1)
+                else:
+                    end = end.replace(month=start.month + 1)
+        except ValueError:
+            end = None
+    else:
+        # Full or partial date string — try appending start year if missing
+        end = parse_date(end_str)
+        if end is None:
+            # e.g. "May 3" without year — append start year
+            end = parse_date(f"{end_str}, {start.year}")
+
+    return (start, end)
+
+
+def make_retreat_event(
+    title: str,
+    date_start: Optional[Date],
+    date_end: Optional[Date] = None,
+    url: Optional[str] = None,
+    source_url: str = "",
+    location: Optional[str] = None,
+    description: Optional[str] = None,
+    teachers: Optional[str] = None,
+) -> Optional[dict]:
+    if not title or not date_start:
+        return None
+    if not in_retreat_window(date_start):
+        return None
+    title = title.strip()
+    if len(title) < 4:
+        return None
+    if _TITLE_BLACKLIST.match(title):
+        return None
+    if title[0].islower():
+        return None
+    if date_end and date_end < date_start:
+        date_end = None
+    return {
+        "title": title[:120],
+        "date_start": date_start.isoformat(),
+        "date_end": date_end.isoformat() if date_end else None,
+        "description": clean_description(description) if description else None,
+        "event_url": url or source_url,
+        "location": location or None,
+        "teachers": teachers.strip() if teachers else None,
+    }
+
+
+def dedup_retreats(retreats: list[dict]) -> list[dict]:
+    seen: set = set()
+    out = []
+    for r in retreats:
+        norm = re.sub(r"[^a-z0-9]", "", r["title"].lower())[:40]
+        key = (norm, r["date_start"])
+        if key not in seen:
+            seen.add(key)
+            out.append(r)
+    return out
+
+
+# ── Retreat site extractors ───────────────────────────────────────────────────
+
+def extract_menla(soup: BeautifulSoup, source_url: str) -> list[dict]:
+    events = []
+    for item in soup.find_all(class_="packages-item"):
+        try:
+            title_el = item.find("h3")
+            link_el = title_el.find("a", href=True) if title_el else None
+            title = link_el.get_text(strip=True) if link_el else (
+                title_el.get_text(strip=True) if title_el else "")
+            url = link_el["href"] if link_el else source_url
+
+            # Date is in the <p style="text-transform: uppercase"> element
+            date_p = item.find("p", style=lambda s: s and "uppercase" in s.lower())
+            date_text = date_p.get_text(strip=True) if date_p else ""
+            start, end = parse_retreat_date_range(date_text)
+
+            teachers_el = item.find(class_="rgteachers")
+            teachers = teachers_el.get_text(" ", strip=True) if teachers_el else None
+
+            # Description: first <p> that isn't the date line
+            desc = None
+            for p in item.find_all("p"):
+                t = p.get_text(strip=True)
+                if t and t != date_text and not t.upper() == t:
+                    desc = t
+                    break
+
+            evt = make_retreat_event(title=title, date_start=start, date_end=end,
+                                     url=url, source_url=source_url,
+                                     description=desc, teachers=teachers)
+            if evt:
+                events.append(evt)
+        except Exception as e:
+            print(f"  [menla parse error] {e}")
+    return dedup_retreats(events)
+
+
+def extract_meganmook(soup: BeautifulSoup, source_url: str) -> list[dict]:
+    # Each retreat is a <strong> tag with <br>-separated lines:
+    # Title<br/>with Teachers<br/>Date Range
+    events = []
+    for strong in soup.find_all("strong"):
+        try:
+            parts = []
+            for child in strong.children:
+                if hasattr(child, "name") and child.name == "br":
+                    continue
+                t = child.get_text(strip=True) if hasattr(child, "get_text") else str(child).strip()
+                if t:
+                    parts.append(t)
+
+            if len(parts) < 2:
+                continue
+
+            title = parts[0]
+            date_text = None
+            teachers = None
+            for part in parts[1:]:
+                if parse_retreat_date_range(part)[0] is not None:
+                    date_text = part
+                elif re.match(r"^with\b", part, re.I):
+                    teachers = re.sub(r"^with\s+", "", part, flags=re.IGNORECASE).strip()
+
+            if not date_text:
+                continue
+
+            start, end = parse_retreat_date_range(date_text)
+
+            # Link: nearest <a> after this strong's parent
+            url = source_url
+            parent = strong.parent
+            if parent:
+                for a in parent.find_all_next("a", href=True, limit=5):
+                    if re.search(r"learn|register|more|info|holl|retreat", a.get("href", ""), re.I):
+                        url = a["href"]
+                        break
+
+            # Location: <p> immediately after the parent block
+            location = None
+            if parent:
+                nxt = parent.find_next_sibling()
+                if nxt and nxt.name == "p":
+                    t = nxt.get_text(strip=True)
+                    if t and not re.match(r"^(register|learn|join|http)", t, re.I):
+                        location = t
+
+            evt = make_retreat_event(title=title, date_start=start, date_end=end,
+                                     url=url, source_url=source_url,
+                                     location=location, teachers=teachers)
+            if evt:
+                events.append(evt)
+        except Exception as e:
+            print(f"  [meganmook parse error] {e}")
+    return dedup_retreats(events)
+
+
+def extract_hakomi(soup: BeautifulSoup, source_url: str) -> list[dict]:
+    events = []
+    for article in soup.find_all(class_=re.compile(r"tribe-events-calendar-list__event")):
+        try:
+            link_el = article.find(class_=re.compile(r"tribe-events-calendar-list__event-title-link"))
+            title = link_el.get_text(strip=True) if link_el else ""
+            url = link_el["href"] if link_el and link_el.has_attr("href") else source_url
+
+            time_el = article.find("time")
+            start = None
+            if time_el and time_el.has_attr("datetime"):
+                raw = time_el["datetime"]
+                # datetime attr may be "2026-05-02" or "2026-05-02T08:00:00-04:00"
+                try:
+                    start = dateutil_parser.parse(raw).date()
+                except Exception:
+                    pass
+
+            end_el = article.find(class_=re.compile(r"tribe-event-date-end"))
+            end = None
+            if end_el and start:
+                end_text = end_el.get_text(strip=True)
+                # May be "May 3" or "May 3 @ 5:00 pm" — strip time part
+                end_text = re.sub(r"\s*@.*", "", end_text).strip()
+                end = parse_date(f"{end_text}, {start.year}")
+
+            # Faculty and location from theme-extra-event-fields
+            faculty = None
+            location = None
+            extra = article.find(class_="theme-extra-event-fields")
+            if extra:
+                for p in extra.find_all("p"):
+                    t = p.get_text(strip=True)
+                    if t.startswith("FACULTY:"):
+                        faculty = t[len("FACULTY:"):].strip()
+                    elif t.upper().startswith("LOCATION"):
+                        location = t.split(":", 1)[-1].strip() if ":" in t else None
+
+            evt = make_retreat_event(title=title, date_start=start, date_end=end,
+                                     url=url, source_url=source_url,
+                                     location=location, teachers=faculty)
+            if evt:
+                events.append(evt)
+        except Exception as e:
+            print(f"  [hakomi parse error] {e}")
+    return dedup_retreats(events)
+
+
+async def fetch_omega_retreats(source_url: str, client: httpx.AsyncClient) -> list[dict]:
+    """Fetch Omega Institute retreats from the next 3 monthly listing pages via curl."""
+    from calendar import month_name as _MONTH_NAME
+    today = _today()
+    events: list[dict] = []
+
+    for offset in range(3):
+        # Compute target month
+        total_months = today.month - 1 + offset
+        year = today.year + total_months // 12
+        month = total_months % 12 + 1
+        month_slug = _MONTH_NAME[month].lower()
+        month_url = f"https://www.eomega.org/workshops/workshops-date/{month_slug}-{year}"
+
+        html = await fetch_via_curl(month_url)
+        if not html or "<html" not in html.lower():
+            continue
+
+        soup = BeautifulSoup(html, "html.parser")
+        year_for_month = year
+
+        for card in soup.find_all(class_=re.compile(r"\btriptych__panel\b")):
+            try:
+                body = card.find(class_=re.compile(r"triptych__panel__body"))
+                if not body:
+                    continue
+
+                strong_el = body.find("strong")
+                title = strong_el.get_text(strip=True) if strong_el else ""
+                if not title:
+                    continue
+
+                # Teachers: <em> containing "with"
+                teachers = None
+                for em in body.find_all("em"):
+                    t = em.get_text(strip=True)
+                    if re.match(r"^with\b", t, re.I):
+                        teachers = re.sub(r"^with\s+", "", t, flags=re.IGNORECASE).strip()
+                        break
+
+                # Date: last <em> that looks like a date range
+                date_text = None
+                for em in reversed(body.find_all("em")):
+                    t = em.get_text(strip=True)
+                    if re.search(r"\d", t) and not re.match(r"^with\b", t, re.I):
+                        date_text = t
+                        break
+
+                if not date_text:
+                    continue
+
+                # Append year since Omega omits it on monthly pages
+                if not re.search(r"\d{4}", date_text):
+                    date_text = f"{date_text}, {year_for_month}"
+                start, end = parse_retreat_date_range(date_text)
+
+                # Link
+                link_el = card.find("a", href=True, class_=re.compile(r"\bbtn\b"))
+                url = source_url
+                if link_el:
+                    href = link_el["href"]
+                    url = href if href.startswith("http") else f"https://www.eomega.org{href}"
+
+                # Description: full <p> text minus title/teachers/date
+                desc_parts = []
+                for p in body.find_all("p"):
+                    t = p.get_text(" ", strip=True)
+                    t = re.sub(re.escape(title), "", t, flags=re.I).strip()
+                    if teachers:
+                        t = re.sub(re.escape(teachers), "", t, flags=re.I).strip()
+                    if date_text:
+                        t = re.sub(re.escape(date_text.split(",")[0]), "", t, flags=re.I).strip()
+                    if t:
+                        desc_parts.append(t)
+                desc = " ".join(desc_parts) or None
+
+                evt = make_retreat_event(title=title, date_start=start, date_end=end,
+                                         url=url, source_url=source_url,
+                                         description=desc, teachers=teachers)
+                if evt:
+                    events.append(evt)
+            except Exception as e:
+                print(f"  [omega card error] {e}")
+
+    return dedup_retreats(events)
+
+
+# ── Retreat orchestration ─────────────────────────────────────────────────────
+
+async def scrape_retreat_source(source: dict, client: httpx.AsyncClient,
+                                semaphore: asyncio.Semaphore) -> list[dict]:
+    async with semaphore:
+        print(f"Scraping retreat: {source['name']} ...")
+        t0 = asyncio.get_event_loop().time()
+        try:
+            if "menla.org" in source["url"]:
+                html = await fetch_page(source["url"], client)
+                soup = BeautifulSoup(html, "html.parser")
+                events = extract_menla(soup, source["url"])
+            elif "meganmook.com" in source["url"]:
+                html = await fetch_page(source["url"], client)
+                soup = BeautifulSoup(html, "html.parser")
+                events = extract_meganmook(soup, source["url"])
+            elif "hakomiinstitute.com" in source["url"]:
+                html = await fetch_page(source["url"], client)
+                soup = BeautifulSoup(html, "html.parser")
+                events = extract_hakomi(soup, source["url"])
+            elif "eomega.org" in source["url"]:
+                events = await fetch_omega_retreats(source["url"], client)
+            else:
+                events = []
+        except Exception as e:
+            print(f"  [retreat error] {source['name']}: {e}")
+            events = []
+
+        elapsed = asyncio.get_event_loop().time() - t0
+        for evt in events:
+            evt["source"] = source["name"]
+            evt["category"] = source["category"]
+            evt["source_url"] = source["url"]
+        print(f"  -> {len(events)} retreats ({elapsed:.1f}s)")
+        return events
+
+
+async def scrape_all_retreats(sources: list[dict]) -> list[dict]:
+    semaphore = asyncio.Semaphore(CONCURRENCY)
+    active = [s for s in sources if s.get("status", "active") != "inactive"]
+    async with httpx.AsyncClient(headers=HTTP_HEADERS) as client:
+        tasks = [scrape_retreat_source(s, client, semaphore) for s in active]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    all_retreats: list[dict] = []
+    for r in results:
+        if isinstance(r, list):
+            all_retreats.extend(r)
+        elif isinstance(r, Exception):
+            print(f"  [retreat task error] {r}")
+
+    return dedup_retreats(all_retreats)
