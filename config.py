@@ -184,6 +184,13 @@ SOURCES = [
 
 RETREAT_SOURCES = [
     {
+        "name": "Sadhana In The City",
+        "url": "https://www.sadhanainthecity.com/maine-retreat",
+        "category": "Retreat",
+        "status": "active",
+        "note": "Single-retreat Squarespace page; title from h1, date from first date-bearing h3",
+    },
+    {
         "name": "Menla Retreat Center",
         "url": "https://menla.org/retreats/",
         "category": "Retreat",

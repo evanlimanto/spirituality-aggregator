@@ -1622,6 +1622,38 @@ def dedup_retreats(retreats: list[dict]) -> list[dict]:
 
 # ── Retreat site extractors ───────────────────────────────────────────────────
 
+def extract_sadhana(soup: BeautifulSoup, source_url: str) -> list[dict]:
+    # Single-retreat Squarespace page: title from h1, date from first date-bearing h3
+    title = ""
+    for h1 in soup.find_all("h1"):
+        t = h1.get_text(strip=True)
+        if t and len(t) > 3:
+            title = t
+            break
+
+    start = end = None
+    location = None
+    h3s = soup.find_all("h3")
+    for i, h3 in enumerate(h3s):
+        text = h3.get_text(strip=True)
+        s, e = parse_retreat_date_range(text)
+        if s:
+            start, end = s, e
+            # Next h3 is often the location
+            if i + 1 < len(h3s):
+                nxt = h3s[i + 1].get_text(strip=True)
+                if nxt and not parse_retreat_date_range(nxt)[0]:
+                    location = nxt
+            break
+
+    if not title or not start:
+        return []
+
+    evt = make_retreat_event(title=title, date_start=start, date_end=end,
+                             url=source_url, source_url=source_url,
+                             location=location)
+    return [evt] if evt else []
+
 def extract_menla(soup: BeautifulSoup, source_url: str) -> list[dict]:
     events = []
     for item in soup.find_all(class_="packages-item"):
@@ -1860,7 +1892,11 @@ async def scrape_retreat_source(source: dict, client: httpx.AsyncClient,
         print(f"Scraping retreat: {source['name']} ...")
         t0 = asyncio.get_event_loop().time()
         try:
-            if "menla.org" in source["url"]:
+            if "sadhanainthecity.com" in source["url"]:
+                html = await fetch_page(source["url"], client)
+                soup = BeautifulSoup(html, "html.parser")
+                events = extract_sadhana(soup, source["url"])
+            elif "menla.org" in source["url"]:
                 html = await fetch_page(source["url"], client)
                 soup = BeautifulSoup(html, "html.parser")
                 events = extract_menla(soup, source["url"])
