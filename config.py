@@ -184,6 +184,13 @@ SOURCES = [
 
 RETREAT_SOURCES = [
     {
+        "name": "Dhamma Sukha Meditation Center",
+        "url": "https://www.dhammasukha.org/retreat-dsmc",
+        "category": "Retreat",
+        "status": "active",
+        "note": "Wix page; h1 pairs for featured retreats, span lines for schedule list",
+    },
+    {
         "name": "Sadhana In The City",
         "url": "https://www.sadhanainthecity.com/maine-retreat",
         "category": "Retreat",

@@ -1622,6 +1622,76 @@ def dedup_retreats(retreats: list[dict]) -> list[dict]:
 
 # ── Retreat site extractors ───────────────────────────────────────────────────
 
+_DS_DATE_START_RE = re.compile(
+    r"^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)",
+    re.IGNORECASE,
+)
+_DS_STRIP_SUFFIX_RE = re.compile(
+    r"\s*[-–|]\s*(open|closed|full|€[\d,]+.*|waitlist.*)$",
+    re.IGNORECASE,
+)
+
+
+def extract_dhammasukha(soup: BeautifulSoup, source_url: str) -> list[dict]:
+    events = []
+
+    # Strategy 1: h1 pairs — a date-only h1 preceded by a title h1
+    h1s = soup.find_all("h1")
+    prev_title = ""
+    for h1 in h1s:
+        text = re.sub(r"\s+", " ", h1.get_text(separator=" ", strip=True))
+        start, end = parse_retreat_date_range(text)
+        if start:
+            if prev_title:
+                evt = make_retreat_event(title=prev_title, date_start=start,
+                                         date_end=end, url=source_url,
+                                         source_url=source_url)
+                if evt:
+                    events.append(evt)
+            prev_title = ""
+        elif len(text) > 4 and not text[0].isdigit():
+            prev_title = text
+
+    # Strategy 2: Wix spans with inline "Date Name" format
+    seen_spans = set()
+    for span in soup.find_all("span", class_="wixui-rich-text__text"):
+        text = re.sub(r"[\xa0​]", " ", span.get_text(strip=True))
+        text = re.sub(r"\s+", " ", text).strip()
+        if not _DS_DATE_START_RE.match(text) or text in seen_spans:
+            continue
+        seen_spans.add(text)
+
+        # Try to split off the date range at the start
+        # Date range ends when we hit a space followed by a word that's not a month/digit
+        # e.g. "May 14 - May 24 BrahmaViharas..." → date="May 14 - May 24", name="BrahmaViharas..."
+        # Find the end of the date portion: after digits/months/hyphens/spaces
+        date_part_m = re.match(
+            r"^([A-Za-z]+\s+\d+(?:st|nd|rd|th)?\s*[-–]\s*(?:[A-Za-z]+\s+)?\d+(?:st|nd|rd|th)?(?:,\s*\d{4})?)\s+(.+)$",
+            text,
+        )
+        if not date_part_m:
+            # Just a date with no name (already handled via h1 pairs) — skip
+            continue
+
+        date_str = date_part_m.group(1).strip()
+        name = date_part_m.group(2).strip()
+        name = _DS_STRIP_SUFFIX_RE.sub("", name).strip()
+        # Skip European retreats (contain €)
+        if "€" in text or "Europe" in name:
+            continue
+
+        start, end = parse_retreat_date_range(date_str)
+        if not start:
+            continue
+
+        evt = make_retreat_event(title=name, date_start=start, date_end=end,
+                                 url=source_url, source_url=source_url)
+        if evt:
+            events.append(evt)
+
+    return dedup_retreats(events)
+
+
 def extract_sadhana(soup: BeautifulSoup, source_url: str) -> list[dict]:
     # Single-retreat Squarespace page: title from h1, date from first date-bearing h3
     title = ""
@@ -1892,7 +1962,11 @@ async def scrape_retreat_source(source: dict, client: httpx.AsyncClient,
         print(f"Scraping retreat: {source['name']} ...")
         t0 = asyncio.get_event_loop().time()
         try:
-            if "sadhanainthecity.com" in source["url"]:
+            if "dhammasukha.org" in source["url"]:
+                html = await fetch_page(source["url"], client)
+                soup = BeautifulSoup(html, "html.parser")
+                events = extract_dhammasukha(soup, source["url"])
+            elif "sadhanainthecity.com" in source["url"]:
                 html = await fetch_page(source["url"], client)
                 soup = BeautifulSoup(html, "html.parser")
                 events = extract_sadhana(soup, source["url"])
