@@ -180,6 +180,13 @@ SOURCES = [
         "status": "inactive",
         "note": "Ticket Tailor — Cloudflare managed JS challenge, no public API",
     },
+    {
+        "name": "BPS Community",
+        "url": "https://www.bps.community/events",
+        "category": "Spiritual",
+        "status": "active",
+        "note": "fetched via curl; generic JSON-LD / time-element fallbacks",
+    },
 ]
 
 RETREAT_SOURCES = [

@@ -1418,7 +1418,7 @@ async def fetch_page(url: str, client: httpx.AsyncClient) -> str:
 
 
 # Sites that block httpx via TLS fingerprinting but allow curl
-CURL_DOMAINS = {"soukstudio.com", "bhakticenter.org"}
+CURL_DOMAINS = {"soukstudio.com", "bhakticenter.org", "bps.community"}
 
 
 async def fetch_via_curl(url: str) -> str:
