@@ -153,6 +153,13 @@ SOURCES = [
         "note": "Squarespace; events in announcementBarSettings JSON blob as 'Day, Mon DD HH:MMpm | Title' links",
     },
     {
+        "name": "BPS Community",
+        "url": "https://www.bps.community/events",
+        "category": "Spiritual",
+        "status": "active",
+        "note": "Wix events-card data-hook attributes (same pattern as bhaktischoolnyc.com)",
+    },
+    {
         "name": "NYC City Center (SRF)",
         "url": "https://newyorkcitycenter.org/calendar-of-events",
         "category": "Spiritual",
@@ -179,6 +186,13 @@ SOURCES = [
         "category": "Yoga",
         "status": "inactive",
         "note": "Ticket Tailor — Cloudflare managed JS challenge, no public API",
+    },
+    {
+        "name": "The Psychedelic Assembly",
+        "url": "https://www.thepsychedelicassembly.com/events/",
+        "category": "General",
+        "status": "active",
+        "note": "Custom WP theme; div.card.event cards; .event__date spans for day/year; h3 a for title",
     },
 ]
 

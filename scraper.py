@@ -9,21 +9,22 @@ Generic strategies (tried for all sites):
   5. <time datetime="..."> elements near headings
 
 Site-specific extractors (keyed by domain substring):
-  - yogamaya.com        → .event-wrapper CSS classes
-  - kinlia.com          → EventCard_container DOM
-  - thus.org            → Shopify product-item with pipe/bullet date
-  - kulayoga.com        → text-block: title / teacher / "Sat, 3/28/26"
-  - ohmcenter.com       → prose lines: "Month D, Day time: Title"
-  - eventbrite.com      → handled by JSON-LD fix (ListItem.item)
-  - satsangnyc.com      → JSON API at /api/events (UTC datetimes)
-  - bhaktischoolnyc.com → Wix data-hook="events-card" attributes
-  - groupmuse.com       → .card-content divs; NYC filtered by EDT/EST timezone
-  - premabrooklyn.com   → Squarespace fluid-engine text-block parsing
-  - 113spring.com       → Shopify products.json; dates from "Offered on..." body
-  - lifeshopny.com      → Wix data-hook="event-title"/"event-full-date" (SSR single-event)
-  - ishtayoga.com       → Squarespace eventlist-event; start time from event-time-localized-start
-  - newcenterny.org     → WooCommerce store API (event_ticket products); date as M.D.YY in name
-  - solidgoldyogi.com   → Squarespace announcementBarSettings JSON blob; "Day Mon D H:MMpm | Title"
+  - yogamaya.com              → .event-wrapper CSS classes
+  - kinlia.com                → EventCard_container DOM
+  - thus.org                  → Shopify product-item with pipe/bullet date
+  - kulayoga.com              → text-block: title / teacher / "Sat, 3/28/26"
+  - ohmcenter.com             → prose lines: "Month D, Day time: Title"
+  - eventbrite.com            → handled by JSON-LD fix (ListItem.item)
+  - satsangnyc.com            → JSON API at /api/events (UTC datetimes)
+  - bhaktischoolnyc.com       → Wix data-hook="events-card" attributes
+  - groupmuse.com             → .card-content divs; NYC filtered by EDT/EST timezone
+  - premabrooklyn.com         → Squarespace fluid-engine text-block parsing
+  - 113spring.com             → Shopify products.json; dates from "Offered on..." body
+  - lifeshopny.com            → Wix data-hook="event-title"/"event-full-date" (SSR single-event)
+  - ishtayoga.com             → Squarespace eventlist-event; start time from event-time-localized-start
+  - newcenterny.org           → WooCommerce store API (event_ticket products); date as M.D.YY in name
+  - solidgoldyogi.com         → Squarespace announcementBarSettings JSON blob; "Day Mon D H:MMpm | Title"
+  - thepsychedelicassembly.com → div.card.event; .event__date spans for day/year; h3 a for title
 """
 
 import asyncio
@@ -1368,18 +1369,48 @@ async def fetch_solidgoldyogi(source_url: str) -> list[dict]:
     return dedup(events)
 
 
+# ── Site-specific: The Psychedelic Assembly ───────────────────────────────────
+#
+# Events are in div.card.event elements.  Each has a div.event__date with two
+# <span> children: day (e.g. "May 6th") and year (e.g. "2026").  Title is in h3 a.
+
+def extract_psychedelicassembly(soup: BeautifulSoup, source_url: str) -> list[dict]:
+    events = []
+    for card in soup.find_all("div", class_=lambda c: c and "event" in c.split() if c else False):
+        info = card.find(class_="event__info")
+        if not info:
+            continue
+        date_div = info.find(class_="event__date")
+        title_el = info.find("h3")
+        if not date_div or not title_el:
+            continue
+        spans = date_div.find_all("span")
+        day_text = spans[0].get_text(strip=True) if spans else ""
+        year_text = spans[1].get_text(strip=True) if len(spans) > 1 else ""
+        d = parse_date(f"{day_text} {year_text}".strip())
+        title = title_el.get_text(strip=True)
+        link_el = card.find("a", href=True)
+        url = link_el["href"] if link_el else source_url
+        evt = make_event(title=title, date_obj=d, url=url, source_url=source_url)
+        if evt:
+            events.append(evt)
+    return dedup(events)
+
+
 SITE_EXTRACTORS = {
-    "yogamaya.com":       extract_yogamaya,
-    "thus.org":           extract_thus,
-    "kulayoga.com":       extract_kula,
-    "ohmcenter.com":      extract_ohm,
-    "soukstudio.com":     extract_souk,
-    "bhaktischoolnyc.com": extract_bhaktischool,
-    "bhakticenter.org":   extract_bhakticenter,
-    "lifeshopny.com":     extract_lifeshop,
-    "ishtayoga.com":      extract_ishtayoga,
-    "groupmuse.com":      extract_groupmuse,
-    "premabrooklyn.com":  extract_prema,
+    "yogamaya.com":                extract_yogamaya,
+    "thus.org":                    extract_thus,
+    "kulayoga.com":                extract_kula,
+    "ohmcenter.com":               extract_ohm,
+    "soukstudio.com":              extract_souk,
+    "bhaktischoolnyc.com":         extract_bhaktischool,
+    "bps.community":               extract_bhaktischool,
+    "bhakticenter.org":            extract_bhakticenter,
+    "lifeshopny.com":              extract_lifeshop,
+    "ishtayoga.com":               extract_ishtayoga,
+    "groupmuse.com":               extract_groupmuse,
+    "premabrooklyn.com":           extract_prema,
+    "thepsychedelicassembly.com":  extract_psychedelicassembly,
 }
 
 
@@ -1418,7 +1449,7 @@ async def fetch_page(url: str, client: httpx.AsyncClient) -> str:
 
 
 # Sites that block httpx via TLS fingerprinting but allow curl
-CURL_DOMAINS = {"soukstudio.com", "bhakticenter.org"}
+CURL_DOMAINS = {"soukstudio.com", "bhakticenter.org", "thepsychedelicassembly.com"}
 
 
 async def fetch_via_curl(url: str) -> str:
