@@ -587,6 +587,14 @@ _THUS_MONTH_SUFFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Detects a month name word anywhere in a string (for carry-forward date parsing)
+_THUS_MONTH_WORD_RE = re.compile(
+    r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?"
+    r"|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?"
+    r"|nov(?:ember)?|dec(?:ember)?)\b",
+    re.IGNORECASE,
+)
+
 
 async def fetch_thus_api(source_url: str) -> list[dict]:
     """Use Shopify's products.json API instead of HTML — works from any IP."""
@@ -612,10 +620,31 @@ async def fetch_thus_api(source_url: str) -> list[dict]:
 
         t = parse_time(body_text)
 
-        # Extract every explicit date from the body (handles multi-date events)
+        # Strip "No Classes …" phrases so cancellation dates don't become events
+        date_text = re.sub(
+            r"\bno\s+class(?:es)?\b[^.–—]*", "", body_text, flags=re.IGNORECASE
+        )
+
+        # Carry-forward month parsing: handles "May 10, 17, 31, June 7 & 21".
+        # Split on commas and & / and, then for standalone day numbers reuse the
+        # last seen month name.
         seen: set = set()
-        for m in DATE_RE.finditer(body_text):
-            d = parse_date(m.group(0))
+        current_month: Optional[str] = None
+        for part in re.split(r",\s*(?:and\s+)?|\s+(?:&|and)\s+", date_text[:300]):
+            part = part.strip()
+            if not part:
+                continue
+            month_m = _THUS_MONTH_WORD_RE.search(part)
+            if month_m:
+                current_month = month_m.group(1)
+                d = parse_date(part)
+            elif (current_month
+                  and re.match(r"^\d{1,2}(?:st|nd|rd|th)?\b", part)
+                  and not re.match(r"^\d{4}\b", part)):
+                day_m = re.match(r"^(\d{1,2})", part)
+                d = parse_date(f"{current_month} {day_m.group(1)}")
+            else:
+                continue
             if d and d not in seen:
                 seen.add(d)
                 evt = make_event(title=title, date_obj=d, time_str=t,
